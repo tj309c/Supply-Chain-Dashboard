@@ -668,12 +668,68 @@ def create_multiselect_filter(label: str, df: pd.DataFrame, column: str,
         key=key_suffix
     )
 
+# --- GROUP 4D: Better error messaging and validation helper ---
+def get_data_quality_summary(df: pd.DataFrame) -> dict:
+    """
+    Generate a data quality summary for validation and error reporting.
+    
+    Analyzes a dataframe for common data quality issues including missing
+    values, empty dataframes, and data type issues.
+    
+    Args:
+        df: Dataframe to analyze
+    
+    Returns:
+        Dict with keys: 'is_empty', 'row_count', 'null_counts', 'issues'
+    """
+    if df.empty:
+        return {'is_empty': True, 'row_count': 0, 'null_counts': {}, 'issues': ['Dataframe is empty']}
+    
+    null_counts = df.isnull().sum()
+    issues = []
+    
+    # Check for columns with all null values
+    for col in df.columns:
+        if null_counts[col] == len(df):
+            issues.append(f"Column '{col}' is completely empty")
+        elif null_counts[col] > len(df) * 0.5:
+            issues.append(f"Column '{col}' is {null_counts[col]/len(df)*100:.0f}% empty")
+    
+    return {
+        'is_empty': False,
+        'row_count': len(df),
+        'null_counts': null_counts[null_counts > 0].to_dict(),
+        'issues': issues
+    }
+
+# --- GROUP 4C: Better empty state messaging helper ---
+def show_empty_state_message(report_name: str, filter_count: int = 0) -> None:
+    """
+    Display a helpful empty state message with suggestions.
+    
+    Args:
+        report_name: Name of the report (e.g., 'Service Level')
+        filter_count: Number of active filters
+    """
+    if filter_count > 0:
+        st.warning("❌ No data matches your filter criteria.\\n\\n**Suggestion:** Try clearing filters or adjusting your selections.", icon="⚠️")
+    else:
+        st.error(f"❌ No {report_name} data available in the dataset.", icon="🚫")
+        st.info("💡 **Troubleshooting:** Check the Debug Log tab for data quality issues.")
+
 # --- NEW: Conditional Filters based on Report View ---
 st.sidebar.header("Filters")
 
+# --- GROUP 4B: Clear All Filters button with tooltip ---
+if st.sidebar.button("🔄 Reset All Filters", use_container_width=True, help="Clear all filter selections and return to full dataset"):
+    st.session_state[f'active_filters_{report_view}'] = {}
+    st.rerun()
+
+st.sidebar.divider()
+
 if report_view == "Inventory Management":
     # --- Inventory-specific filters ---
-    st.sidebar.info("This report shows the current inventory snapshot and has no filters.")
+    st.sidebar.info("📊 This report shows the current inventory snapshot and has no filters.")
     f_inventory = inventory_analysis_data
     
     # Set other filtered dataframes to their unfiltered state so the app doesn't break
@@ -786,7 +842,8 @@ if report_view == "Service Level":
         st.header("Service Level Performance (Shipped Orders)")
         dfs_to_export = {} # Initialize here
         if f_service.empty:
-            st.warning("No shipped (service) data matches your filters.")
+            active_filter_count = len([v for v in st.session_state.get(f'active_filters_{report_view}', {}).values() if v and v != 'All'])
+            show_empty_state_message("Service Level", active_filter_count)
         else:
             # --- Export Button for this view ---
             service_cust_export = get_service_customer_data(f_service)
@@ -894,7 +951,8 @@ elif report_view == "Backorder Report":
         st.header("Backorder Analysis (Unfulfilled Orders)")
         dfs_to_export = {} # Initialize here
         if f_backorder.empty:
-            st.warning("No backorder (unfulfilled) data matches your filters.")
+            active_filter_count = len([v for v in st.session_state.get(f'active_filters_{report_view}', {}).values() if v and v != 'All'])
+            show_empty_state_message("Backorder", active_filter_count)
         else:
             # --- Export Button for this view ---
             dfs_to_export["Backorder_Customer_Top10"] = (get_backorder_customer_data(f_backorder), True)
@@ -971,7 +1029,8 @@ elif report_view == "Inventory Management":
         st.header("Inventory Position")
         dfs_to_export = {} # Initialize here
         if f_inventory.empty:
-            st.warning("No inventory data available.")
+            st.error("❌ No inventory data available.", icon="🚫")
+            st.info("💡 **Troubleshooting:** Check that INVENTORY.csv is loaded and contains data.")
         else:
             # --- Export Button for this view ---
             inv_cat_export = get_inventory_category_data(f_inventory)
