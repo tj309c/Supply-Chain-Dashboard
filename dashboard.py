@@ -878,17 +878,25 @@ if report_view == "Service Level":
                 try:
                     cust_svc = get_service_customer_data(f_service)
                     if cust_svc.empty:
-                        st.warning("No customer data available for charting.")
+                        st.warning("❌ No customer data available for charting. Check your filters or the Debug Log for data quality issues.")
                     else:
-                        fig = make_subplots(specs=[[{"secondary_y": True}]])
-                        fig.add_trace(go.Bar(x=cust_svc.index, y=cust_svc['total_units'], name="Units Issued"), secondary_y=False)
-                        fig.add_trace(go.Scatter(x=cust_svc.index, y=cust_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
-                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
-                        fig.update_yaxes(title_text="Units Issued", secondary_y=False)
-                        fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Validate required columns before rendering
+                        required_cols = ['total_units', kpi_col]
+                        missing_cols = [col for col in required_cols if col not in cust_svc.columns]
+                        if missing_cols:
+                            st.error(f"❌ Missing required data columns: {', '.join(missing_cols)}")
+                        else:
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            fig.add_trace(go.Bar(x=cust_svc.index, y=cust_svc['total_units'], name="Units Issued"), secondary_y=False)
+                            fig.add_trace(go.Scatter(x=cust_svc.index, y=cust_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                            fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
+                            fig.update_yaxes(title_text="Units Issued", secondary_y=False)
+                            fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
+                            st.plotly_chart(fig, use_container_width=True)
+                except KeyError as e:
+                    st.error(f"❌ Missing data column in customer analysis: {str(e)[:50]}")
                 except Exception as e:
-                    st.error(f"Error generating customer chart: {e}")
+                    st.error(f"❌ Error generating customer chart: {str(e)[:100]}")
                 
                 if not cust_svc.empty:
                     st.dataframe(cust_svc.style.format({
@@ -903,17 +911,25 @@ if report_view == "Service Level":
                 try:
                     month_svc = get_service_monthly_data(f_service)
                     if month_svc.empty:
-                        st.warning("No monthly data available for charting.")
+                        st.warning("❌ No monthly data available for charting. Check your filters or the Debug Log for data quality issues.")
                     else:
-                        fig = make_subplots(specs=[[{"secondary_y": True}]])
-                        fig.add_trace(go.Bar(x=month_svc['ship_month'], y=month_svc['total_units'], name="Units Issued"), secondary_y=False)
-                        fig.add_trace(go.Scatter(x=month_svc['ship_month'], y=month_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
-                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
-                        fig.update_yaxes(title_text="Units Issued", secondary_y=False)
-                        fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Validate required columns before rendering
+                        required_cols = ['ship_month', 'total_units', kpi_col]
+                        missing_cols = [col for col in required_cols if col not in month_svc.columns]
+                        if missing_cols:
+                            st.error(f"❌ Missing required data columns: {', '.join(missing_cols)}")
+                        else:
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            fig.add_trace(go.Bar(x=month_svc['ship_month'], y=month_svc['total_units'], name="Units Issued"), secondary_y=False)
+                            fig.add_trace(go.Scatter(x=month_svc['ship_month'], y=month_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                            fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
+                            fig.update_yaxes(title_text="Units Issued", secondary_y=False)
+                            fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
+                            st.plotly_chart(fig, use_container_width=True)
+                except KeyError as e:
+                    st.error(f"❌ Missing data column in monthly analysis: {str(e)[:50]}")
                 except Exception as e:
-                    st.error(f"Error generating monthly chart: {e}")
+                    st.error(f"❌ Error generating monthly chart: {str(e)[:100]}")
                 
                 if not month_svc.empty:
                     st.dataframe(month_svc[['ship_month', 'total_units', 'on_time_pct', 'avg_days']].style.format({
@@ -976,17 +992,25 @@ elif report_view == "Backorder Report":
                 try:
                     cust_bo = get_backorder_customer_data(f_backorder)
                     if cust_bo.empty:
-                        st.warning("No customer data available for charting.")
+                        st.warning("❌ No customer backorder data available. Check your filters or the Debug Log for data quality issues.")
                     else:
-                        fig = make_subplots(specs=[[{"secondary_y": True}]])
-                        fig.add_trace(go.Bar(x=cust_bo.index, y=cust_bo['total_bo_qty'], name="Backorder Qty"), secondary_y=False)
-                        fig.add_trace(go.Scatter(x=cust_bo.index, y=cust_bo['avg_days_on_bo'], name="Avg. Days on BO", mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
-                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
-                        fig.update_yaxes(title_text="Backorder Qty", secondary_y=False)
-                        fig.update_yaxes(title_text="Avg. Days on BO", secondary_y=True)
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Validate required columns before rendering
+                        required_cols = ['total_bo_qty', 'avg_days_on_bo']
+                        missing_cols = [col for col in required_cols if col not in cust_bo.columns]
+                        if missing_cols:
+                            st.error(f"❌ Missing required data columns: {', '.join(missing_cols)}")
+                        else:
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            fig.add_trace(go.Bar(x=cust_bo.index, y=cust_bo['total_bo_qty'], name="Backorder Qty"), secondary_y=False)
+                            fig.add_trace(go.Scatter(x=cust_bo.index, y=cust_bo['avg_days_on_bo'], name="Avg. Days on BO", mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                            fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
+                            fig.update_yaxes(title_text="Backorder Qty", secondary_y=False)
+                            fig.update_yaxes(title_text="Avg. Days on BO", secondary_y=True)
+                            st.plotly_chart(fig, use_container_width=True)
+                except KeyError as e:
+                    st.error(f"❌ Missing data column in backorder customer analysis: {str(e)[:50]}")
                 except Exception as e:
-                    st.error(f"Error generating customer chart: {e}")
+                    st.error(f"❌ Error generating customer backorder chart: {str(e)[:100]}")
                 
                 if not cust_bo.empty:
                     st.dataframe(cust_bo.style.format({
@@ -1000,13 +1024,21 @@ elif report_view == "Backorder Report":
                 try:
                     item_bo_chart = get_backorder_item_data(f_backorder)
                     if item_bo_chart.empty:
-                        st.warning("No item data available for charting.")
+                        st.warning("❌ No item backorder data available. Check your filters or the Debug Log for data quality issues.")
                     else:
-                        fig = go.Figure(go.Bar(x=item_bo_chart['product_name'], y=item_bo_chart['total_bo_qty']))
-                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN, yaxis_title="Backorder Qty")
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Validate required columns before rendering
+                        required_cols = ['product_name', 'total_bo_qty']
+                        missing_cols = [col for col in required_cols if col not in item_bo_chart.columns]
+                        if missing_cols:
+                            st.error(f"❌ Missing required data columns: {', '.join(missing_cols)}")
+                        else:
+                            fig = go.Figure(go.Bar(x=item_bo_chart['product_name'], y=item_bo_chart['total_bo_qty']))
+                            fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN, yaxis_title="Backorder Qty")
+                            st.plotly_chart(fig, use_container_width=True)
+                except KeyError as e:
+                    st.error(f"❌ Missing data column in backorder item analysis: {str(e)[:50]}")
                 except Exception as e:
-                    st.error(f"Error generating item chart: {e}")
+                    st.error(f"❌ Error generating backorder item chart: {str(e)[:100]}")
 
                 if not item_bo_chart.empty:
                     st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({
@@ -1051,18 +1083,26 @@ elif report_view == "Inventory Management":
             try:
                 inv_by_cat = get_inventory_category_data(f_inventory)
                 if inv_by_cat.empty:
-                    st.warning("No inventory category data available for charting.")
+                    st.warning("❌ No inventory category data available. Check your filters or the Debug Log for data quality issues.")
                 else:
-                    fig = make_subplots(specs=[[{"secondary_y": True}]])
-                    fig.add_trace(go.Bar(x=inv_by_cat.index, y=inv_by_cat['total_on_hand'], name="On-Hand Stock"), secondary_y=False)
-                    fig.add_trace(go.Scatter(x=inv_by_cat.index, y=inv_by_cat['avg_dio'], name="Avg. DIO", mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
-                    
-                    fig.update_layout(height=CHART_HEIGHT_LARGE, margin=CHART_MARGIN)
-                    fig.update_yaxes(title_text="On-Hand Stock (Units)", secondary_y=False)
-                    fig.update_yaxes(title_text="Avg. Days of Inventory (DIO)", secondary_y=True)
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Validate required columns before rendering
+                    required_cols = ['total_on_hand', 'avg_dio']
+                    missing_cols = [col for col in required_cols if col not in inv_by_cat.columns]
+                    if missing_cols:
+                        st.error(f"❌ Missing required data columns: {', '.join(missing_cols)}")
+                    else:
+                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+                        fig.add_trace(go.Bar(x=inv_by_cat.index, y=inv_by_cat['total_on_hand'], name="On-Hand Stock"), secondary_y=False)
+                        fig.add_trace(go.Scatter(x=inv_by_cat.index, y=inv_by_cat['avg_dio'], name="Avg. DIO", mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                        
+                        fig.update_layout(height=CHART_HEIGHT_LARGE, margin=CHART_MARGIN)
+                        fig.update_yaxes(title_text="On-Hand Stock (Units)", secondary_y=False)
+                        fig.update_yaxes(title_text="Avg. Days of Inventory (DIO)", secondary_y=True)
+                        st.plotly_chart(fig, use_container_width=True)
+            except KeyError as e:
+                st.error(f"❌ Missing data column in inventory analysis: {str(e)[:50]}")
             except Exception as e:
-                st.error(f"Error generating inventory chart: {e}")
+                st.error(f"❌ Error generating inventory chart: {str(e)[:100]}")
             
             if not inv_by_cat.empty:
                 st.dataframe(inv_by_cat.style.format({
