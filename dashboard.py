@@ -1516,128 +1516,143 @@ if report_view == "📈 Demand Forecasting":
             st.warning("No orders data available for forecasting.")
         else:
             try:
-                # Determine forecast horizon
-                if auto_horizon:
-                    avg_lead_time = np.mean([v['lead_time_days'] for v in lead_time_lookup.values()]) if lead_time_lookup else 90
-                    forecast_horizon = int(avg_lead_time)
-                else:
-                    forecast_horizon = 90
+                # --- Apply filters to orders data if any are set ---
+                active_filters = st.session_state.get(f'active_filters_{report_view}', {})
                 
-                # Prepare orders data for forecasting (ensure column names match calculate_demand_forecast expectations)
-                # Expected columns: order_date, ORDER_QTY (or ordered_qty from load_orders_item_lookup)
-                if 'ordered_qty' in orders_data.columns and 'order_date' in orders_data.columns:
-                    # Rename for compatibility with calculate_demand_forecast function
-                    forecast_input = orders_data[['order_date', 'ordered_qty']].copy()
-                    forecast_input.columns = ['order_date', 'ORDER_QTY']
-                    
-                    forecast_result = calculate_demand_forecast(
-                        forecast_input,
-                        ma_window_days=ma_window,
-                        forecast_horizon_days=forecast_horizon,
-                        group_by=group_dimension.lower()
-                    )
-                    
-                    if isinstance(forecast_result, dict):
-                        forecast_df = forecast_result['data']
-                        
-                        # --- Apply anomaly removal if enabled ---
-                        if remove_anomalies and anomaly_sensitivity:
-                            try:
-                                # Extract sensitivity level (remove emoji for function call)
-                                sensitivity_level = anomaly_sensitivity.split()[0]  # Gets 'Aggressive', 'Normal', or 'Conservative'
-                                
-                                # Get historical data only (don't modify forecast)
-                                historical_data = forecast_df[forecast_df['type'] == 'historical'].copy()
-                                forecast_data_part = forecast_df[forecast_df['type'] == 'forecast'].copy()
-                                
-                                # Check if historical data exists and has required columns
-                                if not historical_data.empty and 'daily_qty' in historical_data.columns:
-                                    # Apply anomaly removal to historical data
-                                    historical_cleaned = remove_demand_anomalies(historical_data, sensitivity=sensitivity_level)
-                                    
-                                    # Recalculate metrics with cleaned data
-                                    anomalies_found = historical_cleaned.attrs.get('anomalies_removed', 0)
-                                    bounds = historical_cleaned.attrs.get('bounds', {})
-                                    
-                                    # Show anomaly removal info
-                                    if anomalies_found > 0:
-                                        st.info(f"✅ Removed {anomalies_found} statistical anomalies ({sensitivity_level} sensitivity)")
-                                        with st.expander("📊 Anomaly Details"):
-                                            sensitivity_idx = {'Aggressive': 0, 'Normal': 1, 'Conservative': 2}.get(sensitivity_level, 1)
-                                            multiplier_map = ['3.0×', '1.5×', '0.75×']
-                                            st.write(f"**Lower Bound:** {bounds.get('lower', 'N/A'):.0f} units")
-                                            st.write(f"**Upper Bound:** {bounds.get('upper', 'N/A'):.0f} units")
-                                            st.write(f"**Method:** Interquartile Range (IQR) with {multiplier_map[sensitivity_idx]} multiplier")
-                                    
-                                    # Rebuild forecast_df with cleaned historical data
-                                    forecast_df = pd.concat([historical_cleaned, forecast_data_part], ignore_index=True)
-                                else:
-                                    st.warning("⚠️ Could not apply anomaly removal: insufficient historical data")
-                            except Exception as e:
-                                st.error(f"❌ Error removing anomalies: {str(e)}")
-                                # Continue with unfiltered forecast
-                        
-                        st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
-                        st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
-                        st.metric("Forecast Horizon", f"{forecast_result['forecast_horizon']} days")
-                        
-                        st.divider()
-                        
-                        # Plot forecast
-                        st.subheader("Demand Trend & Forecast")
-                        
-                        # Prepare data for visualization
-                        historical = forecast_df[forecast_df['type'] == 'historical'].tail(365)
-                        forecast_data = forecast_df[forecast_df['type'] == 'forecast']
-                        
-                        if not historical.empty and not forecast_data.empty:
-                            fig = go.Figure()
-                            fig.add_trace(go.Scatter(
-                                x=historical['date'],
-                                y=historical['daily_qty'],
-                                name='Historical Demand',
-                                mode='lines',
-                                line=dict(color='blue', width=2)
-                            ))
-                            fig.add_trace(go.Scatter(
-                                x=historical['date'],
-                                y=historical['ma'],
-                                name=f'Moving Avg ({ma_window}d)',
-                                mode='lines',
-                                line=dict(color='green', width=2, dash='dash')
-                            ))
-                            fig.add_trace(go.Scatter(
-                                x=forecast_data['date'],
-                                y=forecast_data['daily_qty'],
-                                name='Forecast',
-                                mode='lines',
-                                line=dict(color='orange', width=2, dash='dot'),
-                                fill='tozeroy'
-                            ))
-                            fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
-                            fig.update_xaxes(title_text="Date")
-                            fig.update_yaxes(title_text="Daily Demand (Units)")
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            # Show forecast summary
-                            st.subheader("Forecast Summary")
-                            col_summary_1, col_summary_2, col_summary_3 = st.columns(3)
-                            recent_avg = historical['daily_qty'].tail(30).mean()
-                            historical_avg = historical['daily_qty'].mean()
-                            forecast_avg = forecast_data['daily_qty'].mean()
-                            
-                            with col_summary_1:
-                                st.metric("Recent Avg (30d)", f"{recent_avg:.0f}", f"{((recent_avg/historical_avg - 1)*100):+.1f}%")
-                            with col_summary_2:
-                                st.metric("Historical Avg", f"{historical_avg:.0f}")
-                            with col_summary_3:
-                                st.metric("Forecast Avg", f"{forecast_avg:.0f}")
-                        else:
-                            st.warning("Insufficient data to generate forecast visualization.")
-                    else:
-                        st.warning("Forecast calculation did not return expected data structure.")
+                # Show active filters indicator
+                active_filter_count = len([v for v in active_filters.values() if v and v != 'All' and v != []])
+                if active_filter_count > 0:
+                    st.info(f"📊 Forecast filtered by {active_filter_count} criterion/criteria - Apply Filters to change")
+                
+                # Apply filters to orders data before forecasting
+                if active_filters:
+                    orders_data = apply_filters(orders_data, active_filters)
+                
+                if orders_data.empty:
+                    st.warning("⚠️ No orders match the selected filters. Try adjusting your filter selections.")
                 else:
-                    st.error("Orders data missing required columns (order_date, ordered_qty).")
+                    # Determine forecast horizon
+                    if auto_horizon:
+                        avg_lead_time = np.mean([v['lead_time_days'] for v in lead_time_lookup.values()]) if lead_time_lookup else 90
+                        forecast_horizon = int(avg_lead_time)
+                    else:
+                        forecast_horizon = 90
+                    
+                    # Prepare orders data for forecasting (ensure column names match calculate_demand_forecast expectations)
+                    # Expected columns: order_date, ORDER_QTY (or ordered_qty from load_orders_item_lookup)
+                    if 'ordered_qty' in orders_data.columns and 'order_date' in orders_data.columns:
+                        # Rename for compatibility with calculate_demand_forecast function
+                        forecast_input = orders_data[['order_date', 'ordered_qty']].copy()
+                        forecast_input.columns = ['order_date', 'ORDER_QTY']
+                        
+                        forecast_result = calculate_demand_forecast(
+                            forecast_input,
+                            ma_window_days=ma_window,
+                            forecast_horizon_days=forecast_horizon,
+                            group_by=group_dimension.lower()
+                        )
+                        
+                        if isinstance(forecast_result, dict):
+                            forecast_df = forecast_result['data']
+                            
+                            # --- Apply anomaly removal if enabled ---
+                            if remove_anomalies and anomaly_sensitivity:
+                                try:
+                                    # Extract sensitivity level (remove emoji for function call)
+                                    sensitivity_level = anomaly_sensitivity.split()[0]  # Gets 'Aggressive', 'Normal', or 'Conservative'
+                                    
+                                    # Get historical data only (don't modify forecast)
+                                    historical_data = forecast_df[forecast_df['type'] == 'historical'].copy()
+                                    forecast_data_part = forecast_df[forecast_df['type'] == 'forecast'].copy()
+                                    
+                                    # Check if historical data exists and has required columns
+                                    if not historical_data.empty and 'daily_qty' in historical_data.columns:
+                                        # Apply anomaly removal to historical data
+                                        historical_cleaned = remove_demand_anomalies(historical_data, sensitivity=sensitivity_level)
+                                        
+                                        # Recalculate metrics with cleaned data
+                                        anomalies_found = historical_cleaned.attrs.get('anomalies_removed', 0)
+                                        bounds = historical_cleaned.attrs.get('bounds', {})
+                                        
+                                        # Show anomaly removal info
+                                        if anomalies_found > 0:
+                                            st.info(f"✅ Removed {anomalies_found} statistical anomalies ({sensitivity_level} sensitivity)")
+                                            with st.expander("📊 Anomaly Details"):
+                                                sensitivity_idx = {'Aggressive': 0, 'Normal': 1, 'Conservative': 2}.get(sensitivity_level, 1)
+                                                multiplier_map = ['3.0×', '1.5×', '0.75×']
+                                                st.write(f"**Lower Bound:** {bounds.get('lower', 'N/A'):.0f} units")
+                                                st.write(f"**Upper Bound:** {bounds.get('upper', 'N/A'):.0f} units")
+                                                st.write(f"**Method:** Interquartile Range (IQR) with {multiplier_map[sensitivity_idx]} multiplier")
+                                        
+                                        # Rebuild forecast_df with cleaned historical data
+                                        forecast_df = pd.concat([historical_cleaned, forecast_data_part], ignore_index=True)
+                                    else:
+                                        st.warning("⚠️ Could not apply anomaly removal: insufficient historical data")
+                                except Exception as e:
+                                    st.error(f"❌ Error removing anomalies: {str(e)}")
+                                    # Continue with unfiltered forecast
+                            
+                            st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
+                            st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
+                            st.metric("Forecast Horizon", f"{forecast_result['forecast_horizon']} days")
+                            
+                            st.divider()
+                            
+                            # Plot forecast
+                            st.subheader("Demand Trend & Forecast")
+                            
+                            # Prepare data for visualization
+                            historical = forecast_df[forecast_df['type'] == 'historical'].tail(365)
+                            forecast_data = forecast_df[forecast_df['type'] == 'forecast']
+                            
+                            if not historical.empty and not forecast_data.empty:
+                                fig = go.Figure()
+                                fig.add_trace(go.Scatter(
+                                    x=historical['date'],
+                                    y=historical['daily_qty'],
+                                    name='Historical Demand',
+                                    mode='lines',
+                                    line=dict(color='blue', width=2)
+                                ))
+                                fig.add_trace(go.Scatter(
+                                    x=historical['date'],
+                                    y=historical['ma'],
+                                    name=f'Moving Avg ({ma_window}d)',
+                                    mode='lines',
+                                    line=dict(color='green', width=2, dash='dash')
+                                ))
+                                fig.add_trace(go.Scatter(
+                                    x=forecast_data['date'],
+                                    y=forecast_data['daily_qty'],
+                                    name='Forecast',
+                                    mode='lines',
+                                    line=dict(color='orange', width=2, dash='dot'),
+                                    fill='tozeroy'
+                                ))
+                                fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
+                                fig.update_xaxes(title_text="Date")
+                                fig.update_yaxes(title_text="Daily Demand (Units)")
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                # Show forecast summary
+                                st.subheader("Forecast Summary")
+                                col_summary_1, col_summary_2, col_summary_3 = st.columns(3)
+                                recent_avg = historical['daily_qty'].tail(30).mean()
+                                historical_avg = historical['daily_qty'].mean()
+                                forecast_avg = forecast_data['daily_qty'].mean()
+                                
+                                with col_summary_1:
+                                    st.metric("Recent Avg (30d)", f"{recent_avg:.0f}", f"{((recent_avg/historical_avg - 1)*100):+.1f}%")
+                                with col_summary_2:
+                                    st.metric("Historical Avg", f"{historical_avg:.0f}")
+                                with col_summary_3:
+                                    st.metric("Forecast Avg", f"{forecast_avg:.0f}")
+                            else:
+                                st.warning("Insufficient data to generate forecast visualization.")
+                        else:
+                            st.warning("Forecast calculation did not return expected data structure.")
+                    else:
+                        st.error("Orders data missing required columns (order_date, ordered_qty).")
                     
             except Exception as e:
                 st.error(f"Error generating forecast: {str(e)[:150]}")
