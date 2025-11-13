@@ -61,6 +61,82 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- Mobile Responsive CSS Styling (GROUP 5E) ---
+st.markdown("""
+    <style>
+        /* General responsive improvements */
+        @media (max-width: 768px) {
+            /* Stack columns on mobile */
+            .stColumns > [data-testid="column"] {
+                width: 100% !important;
+                margin-bottom: 1rem;
+            }
+            
+            /* Collapsible sections for better mobile UX */
+            .streamlit-expanderHeader {
+                padding: 0.5rem;
+                font-size: 0.9rem;
+            }
+            
+            /* Reduce padding and margins on mobile */
+            .stMetric {
+                padding: 0.5rem 0.25rem;
+            }
+            
+            /* Improve button touch targets */
+            .stButton > button {
+                width: 100%;
+                min-height: 44px;
+                font-size: 1rem;
+            }
+            
+            /* Stack selectboxes vertically on mobile */
+            .stSelectbox {
+                margin-bottom: 1rem;
+            }
+            
+            /* Better chart responsiveness */
+            .plotly {
+                height: auto !important;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            /* Extra small devices */
+            .stMetric {
+                padding: 0.25rem;
+                font-size: 0.85rem;
+            }
+            
+            h1, h2 {
+                font-size: 1.25rem;
+            }
+            
+            .stTabs [data-baseweb="tab-list"] button {
+                font-size: 0.8rem;
+                padding: 0.5rem;
+            }
+        }
+        
+        /* Touch-friendly improvements across all devices */
+        .stButton > button, .stDownloadButton > button {
+            min-height: 40px;
+            touch-action: manipulation;
+        }
+        
+        /* Better spacing for filters on mobile */
+        .stSidebar .stButton > button {
+            width: 100%;
+        }
+        
+        /* Improve table scrolling on mobile */
+        .stDataFrame {
+            width: 100% !important;
+            overflow-x: auto;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- File Paths ---
 # Support both environment variables and local/relative paths
 # Set env vars to override defaults: e.g., export ORDERS_FILE_PATH="/path/to/ORDERS.csv"
@@ -333,6 +409,22 @@ if st.session_state.get('last_active_report') != report_view:
 # === Caching for KPI Calculations ===
 # By caching the main KPI calculations, the dashboard will feel more responsive
 # when switching between radio buttons within a tab.
+
+# ===== KPI FUNCTIONS & HELPERS =====
+
+def display_kpis_mobile_friendly(kpi_data: dict, columns: int = 3) -> None:
+    """
+    Display KPIs in a mobile-responsive way using Streamlit columns.
+    On mobile devices, automatically stacks vertically via CSS.
+    
+    Args:
+        kpi_data: Dictionary with structure {label: value}
+        columns: Number of columns to use (default 3 for desktop)
+    """
+    cols = st.columns(columns)
+    for idx, (label, value) in enumerate(kpi_data.items()):
+        cols[idx % columns].metric(label, value)
+
 
 def get_service_kpis(_f_service: pd.DataFrame) -> tuple[float, float, float]:
     """
