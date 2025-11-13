@@ -1542,30 +1542,40 @@ if report_view == "📈 Demand Forecasting":
                         
                         # --- Apply anomaly removal if enabled ---
                         if remove_anomalies and anomaly_sensitivity:
-                            # Extract sensitivity level (remove emoji for function call)
-                            sensitivity_level = anomaly_sensitivity.split()[0]  # Gets 'Aggressive', 'Normal', or 'Conservative'
-                            
-                            # Get historical data only (don't modify forecast)
-                            historical_data = forecast_df[forecast_df['type'] == 'historical'].copy()
-                            forecast_data_part = forecast_df[forecast_df['type'] == 'forecast'].copy()
-                            
-                            # Apply anomaly removal to historical data
-                            historical_cleaned = remove_demand_anomalies(historical_data, sensitivity=sensitivity_level)
-                            
-                            # Recalculate metrics with cleaned data
-                            anomalies_found = historical_cleaned.attrs.get('anomalies_removed', 0)
-                            bounds = historical_cleaned.attrs.get('bounds', {})
-                            
-                            # Show anomaly removal info
-                            if anomalies_found > 0:
-                                st.info(f"✅ Removed {anomalies_found} statistical anomalies ({sensitivity_level} sensitivity)")
-                                with st.expander("📊 Anomaly Details"):
-                                    st.write(f"**Lower Bound:** {bounds.get('lower', 'N/A'):.0f} units")
-                                    st.write(f"**Upper Bound:** {bounds.get('upper', 'N/A'):.0f} units")
-                                    st.write(f"**Method:** Interquartile Range (IQR) with {['3.0×', '1.5×', '0.75×'][['Aggressive', 'Normal', 'Conservative'].index(sensitivity_level)]} multiplier")
-                            
-                            # Rebuild forecast_df with cleaned historical data
-                            forecast_df = pd.concat([historical_cleaned, forecast_data_part], ignore_index=True)
+                            try:
+                                # Extract sensitivity level (remove emoji for function call)
+                                sensitivity_level = anomaly_sensitivity.split()[0]  # Gets 'Aggressive', 'Normal', or 'Conservative'
+                                
+                                # Get historical data only (don't modify forecast)
+                                historical_data = forecast_df[forecast_df['type'] == 'historical'].copy()
+                                forecast_data_part = forecast_df[forecast_df['type'] == 'forecast'].copy()
+                                
+                                # Check if historical data exists and has required columns
+                                if not historical_data.empty and 'daily_qty' in historical_data.columns:
+                                    # Apply anomaly removal to historical data
+                                    historical_cleaned = remove_demand_anomalies(historical_data, sensitivity=sensitivity_level)
+                                    
+                                    # Recalculate metrics with cleaned data
+                                    anomalies_found = historical_cleaned.attrs.get('anomalies_removed', 0)
+                                    bounds = historical_cleaned.attrs.get('bounds', {})
+                                    
+                                    # Show anomaly removal info
+                                    if anomalies_found > 0:
+                                        st.info(f"✅ Removed {anomalies_found} statistical anomalies ({sensitivity_level} sensitivity)")
+                                        with st.expander("📊 Anomaly Details"):
+                                            sensitivity_idx = {'Aggressive': 0, 'Normal': 1, 'Conservative': 2}.get(sensitivity_level, 1)
+                                            multiplier_map = ['3.0×', '1.5×', '0.75×']
+                                            st.write(f"**Lower Bound:** {bounds.get('lower', 'N/A'):.0f} units")
+                                            st.write(f"**Upper Bound:** {bounds.get('upper', 'N/A'):.0f} units")
+                                            st.write(f"**Method:** Interquartile Range (IQR) with {multiplier_map[sensitivity_idx]} multiplier")
+                                    
+                                    # Rebuild forecast_df with cleaned historical data
+                                    forecast_df = pd.concat([historical_cleaned, forecast_data_part], ignore_index=True)
+                                else:
+                                    st.warning("⚠️ Could not apply anomaly removal: insufficient historical data")
+                            except Exception as e:
+                                st.error(f"❌ Error removing anomalies: {str(e)}")
+                                # Continue with unfiltered forecast
                         
                         st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
                         st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
