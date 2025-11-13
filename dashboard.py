@@ -1357,11 +1357,32 @@ else:
 
 # === GROUP 6D: Demand Forecasting Report ===
 if report_view == "📈 Demand Forecasting":
+    """
+    === BUSINESS LOGIC (GROUP 6D) ===
+    DATA SOURCES:
+    - ORDERS.csv: ALL customer orders (shipped + open/pending)
+      → Primary source for demand forecasting (historical demand signal)
+      → Columns: order_date (header-level), ordered_qty (line-level)
+    - DELIVERIES.csv: ALL outbound shipments from warehouse
+      → Used for service level metrics, not forecasting
+    - backorder_data: Derived data showing open/unshipped quantities
+      → Used for backorder reporting, NOT for demand forecasting
+    
+    FORECASTING APPROACH:
+    1. Source: Use ORDERS.csv (all orders) as demand signal
+    2. Method: Moving average (60/120/240/360 days) + trend extrapolation
+    3. Horizon: Dynamic based on vendor lead times, fallback to 90 days
+    4. Result: Historical + Forecasted daily demand with trend analysis
+    """
+    
     st.header("📈 Demand Forecasting & Planning")
     st.markdown("Forecast future demand based on historical order trends and vendor lead times.")
     
     # Get lead time lookup
     lead_time_lookup = st.session_state.get('lead_time_lookup', {})
+    
+    # Initialize forecast_df BEFORE try-except to prevent undefined variable errors
+    forecast_df = pd.DataFrame()
     
     # Configuration options in sidebar
     col_forecast_1, col_forecast_2, col_forecast_3 = st.columns(3)
@@ -1388,88 +1409,118 @@ if report_view == "📈 Demand Forecasting":
             help="Use vendor lead times for forecast horizon"
         )
     
-    # Calculate forecast
-    orders_data = st.session_state.get('backorder_data', pd.DataFrame())
-    if orders_data.empty:
-        st.warning("No orders data available for forecasting.")
-    else:
-        try:
-            # Determine forecast horizon
-            if auto_horizon:
-                avg_lead_time = np.mean([v['lead_time_days'] for v in lead_time_lookup.values()]) if lead_time_lookup else 90
-                forecast_horizon = int(avg_lead_time)
-            else:
-                forecast_horizon = 90
-            
-            forecast_result = calculate_demand_forecast(
-                orders_data,
-                ma_window_days=ma_window,
-                forecast_horizon_days=forecast_horizon,
-                group_by=group_dimension.lower()
-            )
-            
-            if isinstance(forecast_result, dict):
-                forecast_df = forecast_result['data']
-                st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
-                st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
-                st.metric("Forecast Horizon", f"{forecast_result['forecast_horizon']} days")
-                
-                st.divider()
-                
-                # Plot forecast
-                st.subheader("Demand Trend & Forecast")
-                
-                # Prepare data for visualization
-                historical = forecast_df[forecast_df['type'] == 'historical'].tail(365)
-                forecast_data = forecast_df[forecast_df['type'] == 'forecast']
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=historical['date'],
-                    y=historical['daily_qty'],
-                    name='Historical Demand',
-                    mode='lines',
-                    line=dict(color='blue', width=2)
-                ))
-                fig.add_trace(go.Scatter(
-                    x=historical['date'],
-                    y=historical['ma'],
-                    name=f'Moving Avg ({ma_window}d)',
-                    mode='lines',
-                    line=dict(color='green', width=2, dash='dash')
-                ))
-                fig.add_trace(go.Scatter(
-                    x=forecast_data['date'],
-                    y=forecast_data['daily_qty'],
-                    name='Forecast',
-                    mode='lines',
-                    line=dict(color='orange', width=2, dash='dot'),
-                    fill='tozeroy'
-                ))
-                fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
-                fig.update_xaxes(title_text="Date")
-                fig.update_yaxes(title_text="Daily Demand (Units)")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Show forecast summary
-                st.subheader("Forecast Summary")
-                col_summary_1, col_summary_2, col_summary_3 = st.columns(3)
-                recent_avg = historical['daily_qty'].tail(30).mean()
-                historical_avg = historical['daily_qty'].mean()
-                forecast_avg = forecast_data['daily_qty'].mean()
-                
-                with col_summary_1:
-                    st.metric("Recent Avg (30d)", f"{recent_avg:.0f}", f"{((recent_avg/historical_avg - 1)*100):+.1f}%")
-                with col_summary_2:
-                    st.metric("Historical Avg", f"{historical_avg:.0f}")
-                with col_summary_3:
-                    st.metric("Forecast Avg", f"{forecast_avg:.0f}")
-                
-        except Exception as e:
-            st.error(f"Error generating forecast: {str(e)[:100]}")
-            st.info("Check the Debug Log for data quality issues.")
+    # Get orders data (all customer orders - primary demand signal)
+    # Note: Sourced from ORDERS.csv via load_orders_item_lookup in load_all_data()
+    orders_item_data = st.session_state.get('master_data', pd.DataFrame())  # This gets populated during data load
     
-    # Export options
+    # Since we need the full orders data with order dates, load it from session if available
+    # Otherwise fall back to showing a message
+    try:
+        # Try to get orders data - this is aggregated order-level data with order_date and ordered_qty
+        # Re-load from source if not in session state
+        from data_loader import load_orders_item_lookup
+        
+        orders_data = load_orders_item_lookup(ORDERS_FILE_PATH)[1]  # Get the dataframe part
+        
+        if orders_data.empty:
+            st.warning("No orders data available for forecasting.")
+        else:
+            try:
+                # Determine forecast horizon
+                if auto_horizon:
+                    avg_lead_time = np.mean([v['lead_time_days'] for v in lead_time_lookup.values()]) if lead_time_lookup else 90
+                    forecast_horizon = int(avg_lead_time)
+                else:
+                    forecast_horizon = 90
+                
+                # Prepare orders data for forecasting (ensure column names match calculate_demand_forecast expectations)
+                # Expected columns: order_date, ORDER_QTY (or ordered_qty from load_orders_item_lookup)
+                if 'ordered_qty' in orders_data.columns and 'order_date' in orders_data.columns:
+                    # Rename for compatibility with calculate_demand_forecast function
+                    forecast_input = orders_data[['order_date', 'ordered_qty']].copy()
+                    forecast_input.columns = ['order_date', 'ORDER_QTY']
+                    
+                    forecast_result = calculate_demand_forecast(
+                        forecast_input,
+                        ma_window_days=ma_window,
+                        forecast_horizon_days=forecast_horizon,
+                        group_by=group_dimension.lower()
+                    )
+                    
+                    if isinstance(forecast_result, dict):
+                        forecast_df = forecast_result['data']
+                        st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
+                        st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
+                        st.metric("Forecast Horizon", f"{forecast_result['forecast_horizon']} days")
+                        
+                        st.divider()
+                        
+                        # Plot forecast
+                        st.subheader("Demand Trend & Forecast")
+                        
+                        # Prepare data for visualization
+                        historical = forecast_df[forecast_df['type'] == 'historical'].tail(365)
+                        forecast_data = forecast_df[forecast_df['type'] == 'forecast']
+                        
+                        if not historical.empty and not forecast_data.empty:
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=historical['date'],
+                                y=historical['daily_qty'],
+                                name='Historical Demand',
+                                mode='lines',
+                                line=dict(color='blue', width=2)
+                            ))
+                            fig.add_trace(go.Scatter(
+                                x=historical['date'],
+                                y=historical['ma'],
+                                name=f'Moving Avg ({ma_window}d)',
+                                mode='lines',
+                                line=dict(color='green', width=2, dash='dash')
+                            ))
+                            fig.add_trace(go.Scatter(
+                                x=forecast_data['date'],
+                                y=forecast_data['daily_qty'],
+                                name='Forecast',
+                                mode='lines',
+                                line=dict(color='orange', width=2, dash='dot'),
+                                fill='tozeroy'
+                            ))
+                            fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
+                            fig.update_xaxes(title_text="Date")
+                            fig.update_yaxes(title_text="Daily Demand (Units)")
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Show forecast summary
+                            st.subheader("Forecast Summary")
+                            col_summary_1, col_summary_2, col_summary_3 = st.columns(3)
+                            recent_avg = historical['daily_qty'].tail(30).mean()
+                            historical_avg = historical['daily_qty'].mean()
+                            forecast_avg = forecast_data['daily_qty'].mean()
+                            
+                            with col_summary_1:
+                                st.metric("Recent Avg (30d)", f"{recent_avg:.0f}", f"{((recent_avg/historical_avg - 1)*100):+.1f}%")
+                            with col_summary_2:
+                                st.metric("Historical Avg", f"{historical_avg:.0f}")
+                            with col_summary_3:
+                                st.metric("Forecast Avg", f"{forecast_avg:.0f}")
+                        else:
+                            st.warning("Insufficient data to generate forecast visualization.")
+                    else:
+                        st.warning("Forecast calculation did not return expected data structure.")
+                else:
+                    st.error("Orders data missing required columns (order_date, ordered_qty).")
+                    
+            except Exception as e:
+                st.error(f"Error generating forecast: {str(e)[:150]}")
+                st.info("Check the Debug Log for data quality issues.")
+                st.write(f"Details: {str(e)}")
+    
+    except Exception as e:
+        st.error(f"Error loading orders data: {str(e)[:150]}")
+        st.info("Unable to load ORDERS.csv for forecasting.")
+    
+    # Export options - only show if forecast was successfully calculated
     st.divider()
     st.subheader("Export Forecast Data")
     if not forecast_df.empty:
@@ -1484,6 +1535,8 @@ if report_view == "📈 Demand Forecasting":
             )
         except Exception as e:
             st.warning(f"Could not generate export: {e}")
+    else:
+        st.info("Run the forecast above to enable data export.")
 
 else:
     # === Tabbed Interface for standard reports ===
