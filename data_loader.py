@@ -614,3 +614,117 @@ def load_inventory_analysis_data(inventory_df, deliveries_path, master_data_df, 
     
     logs.append(f"INFO: Inventory Analysis finished in {time.time() - start_time:.2f} seconds.")
     return logs, df
+
+
+# === GROUP 6C: Vendor PO Lead Time Calculations ===
+
+def load_vendor_po_lead_times(vendor_po_path, inbound_path, logs=None):
+    """
+    Calculate vendor-item lead times from historical PO and inbound data (GROUP 6C).
+    
+    Uses last 2 years of data to compute median lead time per vendor-item combination.
+    Lead time = Posting Date (actual receipt) - Order Creation Date.
+    Adds 5-day safety stock buffer for restock estimation.
+    
+    Args:
+        vendor_po_path: Path to 'Domestic Vendor POs.csv'
+        inbound_path: Path to 'DOMESTIC INBOUND.csv'
+        logs: Optional list to append logging messages
+    
+    Returns:
+        Dictionary mapping 'sku' -> {'lead_time_days': int, 'vendor_count': int}
+    """
+    if logs is None:
+        logs = []
+    
+    start_time = time.time()
+    logs.append("--- Vendor PO Lead Time Calculator ---")
+    lead_time_lookup = {}
+    
+    try:
+        # Load vendor POs with required columns
+        po_cols = ['SAP Purchase Orders - Purchasing Document Number', 
+                   'Order Creation Date - Date', 'SAP Material Code']
+        vendor_pos = safe_read_csv('vendor_po', vendor_po_path, usecols=po_cols, low_memory=False)
+        vendor_pos.columns = ['po_number', 'order_date', 'sku']
+        vendor_pos['order_date'] = pd.to_datetime(vendor_pos['order_date'], errors='coerce')
+        logs.append(f"INFO: Loaded {len(vendor_pos)} vendor PO records")
+        
+    except Exception as e:
+        logs.append(f"WARNING: Could not load vendor POs: {e}")
+        return lead_time_lookup
+    
+    try:
+        # Load inbound receipts with required columns
+        inbound_cols = ['Purchase Order Number', 'Posting Date', 'Material Number']
+        inbound = safe_read_csv('inbound', inbound_path, usecols=inbound_cols, low_memory=False)
+        inbound.columns = ['po_number', 'receipt_date', 'sku']
+        inbound['receipt_date'] = pd.to_datetime(inbound['receipt_date'], errors='coerce')
+        logs.append(f"INFO: Loaded {len(inbound)} inbound receipt records")
+        
+    except Exception as e:
+        logs.append(f"WARNING: Could not load inbound data: {e}")
+        return lead_time_lookup
+    
+    try:
+        # Filter to last 2 years
+        two_years_ago = TODAY - pd.Timedelta(days=730)
+        vendor_pos = vendor_pos[vendor_pos['order_date'] >= two_years_ago]
+        inbound = inbound[inbound['receipt_date'] >= two_years_ago]
+        logs.append(f"INFO: Filtered to last 2 years: {len(vendor_pos)} POs, {len(inbound)} receipts")
+        
+        # Join POs with inbound receipts on PO number and SKU
+        merged = pd.merge(vendor_pos, inbound, on=['po_number', 'sku'], how='inner')
+        merged = merged.dropna(subset=['order_date', 'receipt_date'])
+        
+        # Calculate actual lead time
+        merged['lead_time'] = (merged['receipt_date'] - merged['order_date']).dt.days
+        merged = merged[merged['lead_time'] >= 0]  # Remove negative lead times (data errors)
+        
+        logs.append(f"INFO: Calculated {len(merged)} matched PO receipts with lead times")
+        
+        # Calculate median lead time per SKU
+        lead_times_by_sku = merged.groupby('sku').agg({
+            'lead_time': ['median', 'count']
+        }).reset_index()
+        lead_times_by_sku.columns = ['sku', 'median_lead_time', 'po_count']
+        
+        # Add 5-day safety stock buffer
+        SAFETY_STOCK_DAYS = 5
+        lead_times_by_sku['lead_time_with_safety'] = lead_times_by_sku['median_lead_time'] + SAFETY_STOCK_DAYS
+        
+        # Build lookup dictionary
+        for _, row in lead_times_by_sku.iterrows():
+            lead_time_lookup[row['sku']] = {
+                'lead_time_days': int(row['lead_time_with_safety']),
+                'vendor_count': int(row['po_count']),
+                'median_base': int(row['median_lead_time'])
+            }
+        
+        logs.append(f"INFO: Created lead time lookup for {len(lead_time_lookup)} SKUs (median + 5-day safety stock)")
+        logs.append(f"INFO: Lead time calculation completed in {time.time() - start_time:.2f} seconds")
+        
+    except Exception as e:
+        logs.append(f"ERROR: Failed to calculate lead times: {e}")
+    
+    return lead_time_lookup
+
+
+def get_forecast_horizon(sku: str, lead_time_lookup: dict, default_horizon: int = 90) -> int:
+    """
+    Get the forecast horizon for demand forecasting based on lead time (GROUP 6C/6D).
+    
+    Forecast horizon = lead time + review period
+    Used to determine how far ahead to forecast demand.
+    
+    Args:
+        sku: SKU/Material code
+        lead_time_lookup: Dictionary from load_vendor_po_lead_times()
+        default_horizon: Days to forecast if no lead time found (default 90)
+    
+    Returns:
+        Number of days to forecast (int)
+    """
+    if sku in lead_time_lookup:
+        return lead_time_lookup[sku]['lead_time_days']
+    return default_horizon

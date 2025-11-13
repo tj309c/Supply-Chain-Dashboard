@@ -16,7 +16,9 @@ from data_loader import (
     load_service_data,
     load_backorder_data, # <-- NEW
     load_inventory_data,
-    load_inventory_analysis_data
+    load_inventory_analysis_data,
+    load_vendor_po_lead_times,  # <-- GROUP 6C
+    get_forecast_horizon  # <-- GROUP 6C/6D
 )
 from utils import get_filtered_data_as_excel, get_filtered_data_as_excel_with_metadata
 
@@ -329,6 +331,14 @@ def load_all_data():
         log_msgs_inv_analysis, inventory_analysis_data = get_inventory_analysis_data(inventory_data, DELIVERIES_FILE_PATH, master_data)
         st.session_state.debug_logs.extend(log_msgs_inv_analysis)
         # if not inv_analysis_errors.empty: ... # Add error handling if needed
+
+        # --- GROUP 6C: Load vendor PO lead times ---
+        lead_time_lookup = load_vendor_po_lead_times(
+            "data/Domestic Vendor POs.csv",
+            "data/DOMESTIC INBOUND.csv",
+            logs=st.session_state.debug_logs
+        )
+        st.session_state.lead_time_lookup = lead_time_lookup
 
         # Store the final dataframes in session state
         st.session_state.master_data = master_data
@@ -739,6 +749,81 @@ def get_inventory_kpis(_f_inventory: pd.DataFrame) -> tuple[float, float]:
     # --- FIX: Use top-down DIO calculation for the main KPI ---
     avg_dio = total_on_hand / total_daily_demand if total_daily_demand > 0 else 0
     return total_on_hand, avg_dio
+
+
+# === GROUP 6C: Predictive Insights ===
+
+def estimate_bo_resolution_date(days_on_backorder: float, lead_time_lookup: dict, 
+                                 sku: str = None, default_horizon: int = 90) -> dict:
+    """
+    Estimate when backorder will be resolved based on vendor lead time (GROUP 6C).
+    
+    Uses historical PO lead times to forecast when BO item will be back in stock.
+    Accounts for days already on backorder + remaining lead time.
+    
+    Args:
+        days_on_backorder: Current days the item has been on BO
+        lead_time_lookup: Dictionary of SKU -> lead_time_days from vendor POs
+        sku: Material code (used to look up lead time)
+        default_horizon: Days to assume if no lead time found (90 days)
+    
+    Returns:
+        Dictionary with: {'estimated_days_to_resolve': int, 'confidence': str, 'based_on': str}
+    """
+    if sku and sku in lead_time_lookup:
+        lead_time_days = lead_time_lookup[sku]['lead_time_days']
+        po_count = lead_time_lookup[sku]['vendor_count']
+        confidence = 'High' if po_count >= 5 else 'Medium' if po_count >= 2 else 'Low'
+        based_on = f"Based on {po_count} historical POs"
+    else:
+        lead_time_days = default_horizon
+        confidence = 'Low'
+        based_on = "Default estimate (no PO history)"
+    
+    # Days remaining = lead time (already includes safety stock)
+    days_remaining = max(0, lead_time_days - int(days_on_backorder))
+    
+    return {
+        'estimated_days_to_resolve': days_remaining,
+        'confidence': confidence,
+        'based_on': based_on,
+        'lead_time_base': lead_time_days
+    }
+
+
+def forecast_dio_trend(current_dio: float, recent_demand_trend: str = 'stable') -> dict:
+    """
+    Forecast DIO trend based on current demand patterns (GROUP 6C).
+    
+    Simple method: Compare recent vs historical demand to predict DIO direction.
+    If demand increasing -> DIO will decrease (faster turnover)
+    If demand decreasing -> DIO will increase (slower turnover)
+    
+    Args:
+        current_dio: Current Days of Inventory
+        recent_demand_trend: 'increasing', 'decreasing', or 'stable'
+    
+    Returns:
+        Dictionary with: {'forecasted_dio_direction': str, 'action': str, 'rationale': str}
+    """
+    if recent_demand_trend == 'increasing':
+        direction = '📉 Decreasing'
+        action = '✅ Positive - Inventory turning over faster'
+        rationale = 'Higher demand = faster inventory consumption'
+    elif recent_demand_trend == 'decreasing':
+        direction = '📈 Increasing'
+        action = '⚠️ Monitor - Stock may accumulate'
+        rationale = 'Lower demand = slower inventory turnover'
+    else:
+        direction = '➡️ Stable'
+        action = '✅ Maintained - Current DIO expected to hold'
+        rationale = 'Stable demand = stable inventory levels'
+    
+    return {
+        'forecasted_dio_direction': direction,
+        'action': action,
+        'rationale': rationale
+    }
 
 
 # === Caching for Aggregated Chart Data ===
