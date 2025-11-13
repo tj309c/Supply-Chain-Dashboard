@@ -334,7 +334,20 @@ if st.session_state.get('last_active_report') != report_view:
 # By caching the main KPI calculations, the dashboard will feel more responsive
 # when switching between radio buttons within a tab.
 
-def get_service_kpis(_f_service):
+def get_service_kpis(_f_service: pd.DataFrame) -> tuple[float, float, float]:
+    """
+    Calculate key performance indicators for Service Level report.
+    
+    Computes the total units issued, on-time delivery percentage, and average 
+    days to deliver from filtered service data.
+    
+    Args:
+        _f_service: Filtered service data dataframe with columns: 
+                   'units_issued', 'on_time', 'days_to_deliver'
+    
+    Returns:
+        Tuple of (total_units, on_time_pct, avg_days_to_deliver)
+    """
     if _f_service.empty:
         return 0, 0, 0
     on_time_pct = _f_service['on_time'].mean() * 100
@@ -342,7 +355,20 @@ def get_service_kpis(_f_service):
     total_units = _f_service['units_issued'].sum()
     return total_units, on_time_pct, avg_days
 
-def get_backorder_kpis(_f_backorder):
+def get_backorder_kpis(_f_backorder: pd.DataFrame) -> tuple[float, float, int]:
+    """
+    Calculate key performance indicators for Backorder Report.
+    
+    Computes total backorder quantity, weighted average days on backorder, 
+    and count of unique sales orders with backorders.
+    
+    Args:
+        _f_backorder: Filtered backorder data dataframe with columns:
+                     'backorder_qty', 'days_on_backorder', 'sales_order'
+    
+    Returns:
+        Tuple of (total_bo_qty, weighted_avg_days_on_bo, unique_orders)
+    """
     if _f_backorder.empty:
         return 0, 0, 0
     total_bo_qty = _f_backorder['backorder_qty'].sum()
@@ -351,7 +377,20 @@ def get_backorder_kpis(_f_backorder):
     unique_orders = _f_backorder['sales_order'].nunique()
     return total_bo_qty, avg_bo_days, unique_orders
 
-def get_inventory_kpis(_f_inventory):
+def get_inventory_kpis(_f_inventory: pd.DataFrame) -> tuple[float, float]:
+    """
+    Calculate key performance indicators for Inventory Management report.
+    
+    Computes total on-hand stock and weighted average Days of Inventory (DIO)
+    using top-down calculation: Total On-Hand / Total Daily Demand.
+    
+    Args:
+        _f_inventory: Filtered inventory data dataframe with columns:
+                     'on_hand_qty', 'daily_demand'
+    
+    Returns:
+        Tuple of (total_on_hand_qty, weighted_avg_dio_days)
+    """
     if _f_inventory.empty:
         return 0, 0
     
@@ -368,7 +407,20 @@ def get_inventory_kpis(_f_inventory):
 # It makes the dashboard feel instantaneous when switching between tabs or KPIs
 # because the expensive aggregations don't need to be re-calculated.
 
-def get_service_customer_data(_f_service):
+def get_service_customer_data(_f_service: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate service data by customer (top 10 by units).
+    
+    Groups filtered service data by customer and calculates total units,
+    on-time percentage, and average days to deliver. Returns top 10 customers.
+    
+    Args:
+        _f_service: Filtered service data dataframe
+    
+    Returns:
+        DataFrame indexed by customer_name with columns: 
+        total_units, on_time_pct, avg_days (sorted by units desc)
+    """
     cust_svc = _f_service.groupby('customer_name').agg(
         total_units=('units_issued', 'sum'),
         on_time_pct=('on_time', 'mean'),
@@ -377,7 +429,21 @@ def get_service_customer_data(_f_service):
     cust_svc['on_time_pct'] *= 100
     return cust_svc
 
-def get_service_monthly_data(_f_service):
+def get_service_monthly_data(_f_service: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate service data by month.
+    
+    Groups filtered service data by month and calculates total units,
+    on-time percentage, and average days to deliver.
+    
+    Args:
+        _f_service: Filtered service data dataframe with columns:
+                   'ship_month_num', 'ship_month', 'units_issued', 'on_time', 'days_to_deliver'
+    
+    Returns:
+        DataFrame with columns: ship_month_num, ship_month, total_units, 
+        on_time_pct, avg_days (sorted by month)
+    """
     month_svc = _f_service.groupby(['ship_month_num', 'ship_month']).agg(
         total_units=('units_issued', 'sum'),
         on_time_pct=('on_time', 'mean'),
@@ -386,7 +452,21 @@ def get_service_monthly_data(_f_service):
     month_svc['on_time_pct'] *= 100
     return month_svc
 
-def get_backorder_customer_data(_f_backorder):
+def get_backorder_customer_data(_f_backorder: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate backorder data by customer (top 10 by backorder qty).
+    
+    Groups filtered backorder data by customer and calculates total backorder
+    quantity and weighted average days on backorder. Returns top 10 customers.
+    
+    Args:
+        _f_backorder: Filtered backorder data dataframe with columns:
+                     'customer_name', 'backorder_qty', 'days_on_backorder'
+    
+    Returns:
+        DataFrame indexed by customer_name with columns:
+        total_bo_qty, avg_days_on_bo (sorted by qty desc)
+    """
     if _f_backorder.empty:
         return pd.DataFrame()
     
@@ -399,8 +479,21 @@ def get_backorder_customer_data(_f_backorder):
         avg_days_on_bo=('days_on_backorder', weighted_avg)
     ).sort_values(by='total_bo_qty', ascending=False).head(10)
 
-def get_backorder_item_data(_f_backorder):
-    """Aggregates backorder data by item for the chart and table."""
+def get_backorder_item_data(_f_backorder: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate backorder data by item/SKU (top 10 by backorder qty).
+    
+    Groups filtered backorder data by SKU and product name, calculating total
+    backorder quantity and weighted average days on backorder. Returns top 10 items.
+    
+    Args:
+        _f_backorder: Filtered backorder data dataframe with columns:
+                     'sku', 'product_name', 'backorder_qty', 'days_on_backorder'
+    
+    Returns:
+        DataFrame with columns: sku, product_name, total_bo_qty, avg_days_on_bo
+        (sorted by total_bo_qty desc)
+    """
     if _f_backorder.empty:
         return pd.DataFrame()
 
@@ -414,8 +507,22 @@ def get_backorder_item_data(_f_backorder):
     ).sort_values(by='total_bo_qty', ascending=False).head(10)
     return item_bo.reset_index()
 
-def get_inventory_category_data(df):
-    """Aggregates inventory data by category for the chart."""
+def get_inventory_category_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate inventory data by category for the chart.
+    
+    Groups inventory data by category and calculates total on-hand stock
+    and Days of Inventory (DIO) using top-down calculation method:
+    DIO = Total On-Hand Qty / Total Daily Demand (per category).
+    
+    Args:
+        df: Inventory data dataframe with columns:
+           'category', 'on_hand_qty', 'daily_demand'
+    
+    Returns:
+        DataFrame indexed by category with columns:
+        total_on_hand, total_daily_demand, avg_dio (sorted by on_hand desc)
+    """
     if df.empty:
         return pd.DataFrame()
     
@@ -439,8 +546,20 @@ def get_inventory_category_data(df):
 # --- REFACTORED: Apply Filters to Dataframes ---
 def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     """
-    Applies a dictionary of filters to a dataframe efficiently.
-    It builds a single boolean mask and applies it once.
+    Apply a dictionary of filters to a dataframe efficiently.
+    
+    Builds a single boolean mask from all filters and applies it once,
+    rather than filtering sequentially. Supports both multiselect (list) 
+    and single select (string) filters.
+    
+    Args:
+        df: Source dataframe to filter
+        filters: Dict mapping column names to filter values.
+                For multiselect: value should be a list (uses .isin())
+                For single select: value should be a string (uses equality)
+    
+    Returns:
+        Filtered dataframe with only rows matching all filter criteria
     """
     if df.empty:
         return df
@@ -465,44 +584,83 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     return df[combined_mask]
 
 # --- Helper function to safely get unique values ---
-def get_unique_values(df, column):
+def get_unique_values(df: pd.DataFrame, column: str) -> list:
+    """
+    Get sorted list of unique values from a dataframe column.
+    
+    Retrieves unique values from the specified column, excluding 'Unknown'
+    values, and returns them sorted alphabetically as strings.
+    
+    Args:
+        df: Source dataframe
+        column: Column name to extract unique values from
+    
+    Returns:
+        Sorted list of unique values (excluding 'Unknown')
+    """
     if not df.empty and column in df.columns:
         return sorted(list(df[df[column] != 'Unknown'][column].astype(str).unique()))
     return []
 
 # --- Org #2: Helper function for consistent DataFrame formatting ---
-def format_dataframe_number(value, format_type='currency'):
-    """Apply consistent number formatting to dataframe values."""
+def format_dataframe_number(value: float, format_type: str = 'currency') -> str:
+    """
+    Apply consistent number formatting to dataframe values.
+    
+    Returns the format string for the specified format type from the
+    centralized FORMATS dictionary.
+    
+    Args:
+        value: Numeric value to format (used for type indication)
+        format_type: Format type key from FORMATS dict.
+                    Options: 'currency', 'percentage', 'decimal_1', 'integer'
+    
+    Returns:
+        Format string (e.g., '{:,.0f}' for currency)
+    """
     fmt = FORMATS.get(format_type, FORMATS['decimal_1'])
     return fmt
 
-def create_dataframe_format_dict(columns, format_types):
+def create_dataframe_format_dict(columns: list, format_types: dict) -> dict:
     """
     Create a format dictionary for dataframe styling.
     
+    Builds a dictionary mapping column names to format strings from the
+    centralized FORMATS dictionary. Used with df.style.format().
+    
     Args:
         columns: List of column names to format
-        format_types: Dict mapping column names to format type keys (from FORMATS)
+        format_types: Dict mapping column names to format type keys 
+                     (from FORMATS dict). Options: 'currency', 'percentage', 
+                     'decimal_1', 'integer'
     
     Returns:
-        Dict ready for df.style.format()
+        Dict ready for df.style.format() 
+        (e.g., {'total_units': '{:,.0f}', 'pct': '{:.1f}%'})
     """
     return {col: FORMATS.get(format_types.get(col, 'decimal_1')) 
             for col in columns if col in format_types}
 
 # --- Org #3: Helper function for multiselect filter widgets ---
-def create_multiselect_filter(label, df, column, key_suffix):
+def create_multiselect_filter(label: str, df: pd.DataFrame, column: str, 
+                              key_suffix: str) -> list:
     """
     Create a multiselect filter widget with consistent styling.
     
+    DRY helper that standardizes multiselect filter creation across the
+    dashboard. Automatically extracts unique values from the specified
+    column and renders them in the sidebar.
+    
     Args:
-        label: Display label for the filter
-        df: Source dataframe
+        label: Display label for the filter widget
+        df: Source dataframe to extract unique values from
         column: Column name to get unique values from
-        key_suffix: Unique key suffix for widget identification
+        key_suffix: Unique key suffix for widget identification.
+                   Used by Streamlit to maintain widget state.
     
     Returns:
-        List of selected values (empty list if none selected)
+        List of selected values from the multiselect widget.
+        Returns empty list if user hasn't selected anything.
     """
     return st.sidebar.multiselect(
         label,
@@ -880,7 +1038,21 @@ with tab_debug:
     st.header("🕵️ Line/Bar Graph Debugger")
     st.info("This section checks for common issues that prevent line/bar graphs from rendering.")
 
-    def check_graph_df(df, name, required_cols):
+    def check_graph_df(df: pd.DataFrame, name: str, required_cols: list) -> list:
+        """
+        Validate a dataframe for graph rendering.
+        
+        Checks if a dataframe is empty and if all required columns are
+        present. Used by the Debug Tab to identify data issues.
+        
+        Args:
+            df: Dataframe to validate
+            name: Display name for the dataframe (used in error messages)
+            required_cols: List of column names that must be present
+        
+        Returns:
+            List of validation messages (issues or success)
+        """
         issues = []
         if df.empty:
             issues.append(f"❌ {name} dataframe is EMPTY.")
