@@ -455,7 +455,10 @@ else:
     f_sales_org = st.sidebar.multiselect("Select Sales Org(s):", get_unique_values(filter_source_df, 'sales_org'), key="sales_org")
     f_order_type = st.sidebar.multiselect("Select Order Type(s):", get_unique_values(filter_source_df, 'order_type'), key="order_type")
 
-    if report_view != "Service Level":
+    # --- FIX: Order Reason is an outbound metric (ORDERS.csv/DELIVERIES.csv only) ---
+    # Should NEVER be considered for Inventory reports. Only show for Backorder reports.
+    f_order_reason = []
+    if report_view == "Backorder Report":
         f_order_reason = st.sidebar.multiselect("Select Order Reason(s):", get_unique_values(filter_source_df, 'order_reason'), key="order_reason")
 
     if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
@@ -593,10 +596,10 @@ elif report_view == "Backorder Report":
             current_widget_state = {
                 'order_year': f_year, 'order_month': f_month, 'customer_name': f_customer,
                 'category': f_category, 'product_name': f_material, 'sales_org': f_sales_org,
-                'order_type': f_order_type, 'order_reason': f_order_reason
+                'order_type': f_order_type, 'order_reason': f_order_reason  # Safe: f_order_reason defined for all reports
             }
             active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-        if report_view != "Inventory Management" and 'current_widget_state' in locals() and current_widget_state != active_filters:
+        if report_view != "Inventory Management" and current_widget_state != active_filters:
             st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
 
         st.header("Backorder Analysis (Unfulfilled Orders)")

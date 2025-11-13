@@ -597,6 +597,14 @@ def load_inventory_analysis_data(inventory_df, deliveries_path, master_data_df, 
     df = pd.merge(inventory_df, daily_demand, on='sku', how='left')
     # --- FIX: Only fill NaN values in the 'daily_demand' column ---
     df['daily_demand'] = df['daily_demand'].fillna(0)
+    
+    # --- FIX: Add logging when daily_demand is zero (but keep logic unchanged) ---
+    # Treat 0 daily demand as 0 DIO (inventory not moving = infinite days of inventory is not reported)
+    zero_demand_count = (df['daily_demand'] == 0).sum()
+    if zero_demand_count > 0:
+        logs.append(f"WARNING: {zero_demand_count} SKUs have zero daily demand (no deliveries in last 12 months). DIO will be 0 for these items.")
+        logs.append("ADVICE: This is normal for slow-moving or recently added SKUs. Check 'daily_demand' column for affected items.")
+    
     # Avoid division by zero
     df['dio'] = np.where(df['daily_demand'] > 0, df['on_hand_qty'] / df['daily_demand'], 0)
 
