@@ -437,15 +437,26 @@ report_view = st.sidebar.radio(
     ("Service Level", "Backorder Report", "Inventory Management", "📈 Demand Forecasting")
 )
 
-# --- NEW: Auto-clear caches when switching reports (Perf #2, #4) ---
+# --- ENHANCED: Clear ALL caches and reset filters when switching reports ---
 if st.session_state.get('last_active_report') != report_view:
     # Clear the year-month map cache for this report
     st.session_state[f'cached_year_month_map_{report_view}'] = {}
     # Clear the filter state cache for this report
     st.session_state[f'cached_filter_state_{report_view}'] = None
     st.session_state[f'cached_filter_changed_{report_view}'] = False
+    
+    # ENHANCED: Also clear the debug aggregations cache (GROUP 2 optimization)
+    st.session_state['cached_debug_aggregations'] = {}
+    
+    # ENHANCED: Clear active filters for the NEW report to prevent filter carry-over
+    # This ensures each report starts with a clean slate (no residual filters from other reports)
+    st.session_state[f'active_filters_{report_view}'] = {}
+    
     # Update the last active report
     st.session_state['last_active_report'] = report_view
+    
+    # ENHANCED: Show user feedback about the report switch (confirms cache clear to user)
+    st.success(f"✨ Switched to {report_view} (filters reset, cache cleared)")
 
 # === Caching for KPI Calculations ===
 # By caching the main KPI calculations, the dashboard will feel more responsive
