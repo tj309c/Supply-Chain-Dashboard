@@ -434,7 +434,7 @@ if service_data.empty and backorder_data.empty:
 # --- Report Selection ---
 report_view = st.sidebar.radio(
     "Choose a report to view:",
-    ("Service Level", "Backorder Report", "Inventory Management")
+    ("Service Level", "Backorder Report", "Inventory Management", "📈 Demand Forecasting")
 )
 
 # --- NEW: Auto-clear caches when switching reports (Perf #2, #4) ---
@@ -824,6 +824,120 @@ def forecast_dio_trend(current_dio: float, recent_demand_trend: str = 'stable') 
         'action': action,
         'rationale': rationale
     }
+
+
+# === GROUP 6D: Demand Forecasting ===
+
+def calculate_demand_forecast(orders_df: pd.DataFrame, ma_window_days: int = 120, 
+                              forecast_horizon_days: int = 90, group_by: str = 'all') -> pd.DataFrame:
+    """
+    Calculate demand forecast using moving average method (GROUP 6D).
+    
+    Uses configurable time windows (60/120/240/360 days) to calculate moving average,
+    then extrapolates forward based on forecast horizon (lead time + safety stock).
+    
+    Args:
+        orders_df: Orders dataframe with 'order_date' and 'ORDER_QTY' columns
+        ma_window_days: Moving average window (60, 120, 240, or 360 days)
+        forecast_horizon_days: How many days ahead to forecast (based on lead time)
+        group_by: 'all' (overall), 'category', 'customer_name', or 'sales_org'
+    
+    Returns:
+        DataFrame with historical and forecasted demand
+    """
+    if orders_df.empty:
+        return pd.DataFrame()
+    
+    # Ensure date column is datetime
+    orders_df = orders_df.copy()
+    orders_df['order_date'] = pd.to_datetime(orders_df['order_date'], errors='coerce')
+    orders_df = orders_df.dropna(subset=['order_date'])
+    
+    # Calculate daily demand
+    daily_demand = orders_df.groupby('order_date')['ORDER_QTY'].sum().reset_index()
+    daily_demand.columns = ['date', 'daily_qty']
+    daily_demand = daily_demand.sort_values('date')
+    
+    # Calculate moving average
+    daily_demand['ma'] = daily_demand['daily_qty'].rolling(window=ma_window_days, min_periods=1).mean()
+    
+    # Get latest MA value as baseline for forecast
+    latest_ma = daily_demand['ma'].iloc[-1] if len(daily_demand) > 0 else 0
+    
+    # Calculate trend (simple: compare recent vs older MA)
+    recent_ma = daily_demand['ma'].iloc[-30:].mean() if len(daily_demand) >= 30 else latest_ma
+    older_ma = daily_demand['ma'].iloc[:-30].mean() if len(daily_demand) > 30 else latest_ma
+    trend_pct = ((recent_ma - older_ma) / abs(older_ma)) * 100 if older_ma > 0 else 0
+    
+    # Create forecast dates
+    last_date = daily_demand['date'].max()
+    forecast_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_horizon_days, freq='D')
+    
+    # Simple linear forecast (maintain recent trend)
+    trend_multiplier = 1 + (trend_pct / 100)
+    forecast_qty = [latest_ma * trend_multiplier] * forecast_horizon_days
+    
+    # Create forecast dataframe
+    forecast_df = pd.DataFrame({
+        'date': forecast_dates,
+        'daily_qty': forecast_qty,
+        'ma': forecast_qty,
+        'type': 'forecast'
+    })
+    
+    # Add historical marker
+    daily_demand['type'] = 'historical'
+    
+    # Combine
+    combined = pd.concat([daily_demand, forecast_df], ignore_index=True)
+    
+    return {
+        'data': combined,
+        'latest_daily_avg': latest_ma,
+        'trend': 'Increasing' if trend_pct > 1 else 'Decreasing' if trend_pct < -1 else 'Stable',
+        'trend_pct': trend_pct,
+        'ma_window': ma_window_days,
+        'forecast_horizon': forecast_horizon_days
+    }
+
+
+def aggregate_forecast_by_dimension(orders_df: pd.DataFrame, ma_window_days: int = 120,
+                                    dimension: str = 'category') -> pd.DataFrame:
+    """
+    Aggregate demand forecast by dimension (Category/Customer/Sales Org) (GROUP 6D).
+    
+    Groups orders by specified dimension and calculates separate moving averages
+    for each group to show demand patterns by business segment.
+    
+    Args:
+        orders_df: Orders dataframe
+        ma_window_days: Moving average window days
+        dimension: 'category', 'customer_name', or 'sales_org'
+    
+    Returns:
+        DataFrame with forecast grouped by dimension
+    """
+    if orders_df.empty or dimension not in orders_df.columns:
+        return pd.DataFrame()
+    
+    orders_df = orders_df.copy()
+    orders_df['order_date'] = pd.to_datetime(orders_df['order_date'], errors='coerce')
+    
+    # Group by dimension and date
+    grouped = orders_df.groupby(['order_date', dimension])['ORDER_QTY'].sum().reset_index()
+    grouped.columns = ['date', dimension, 'qty']
+    grouped = grouped.sort_values(['date', dimension])
+    
+    # Calculate MA for each dimension group
+    grouped['ma'] = grouped.groupby(dimension)['qty'].transform(
+        lambda x: x.rolling(window=ma_window_days, min_periods=1).mean()
+    )
+    
+    # Get top 10 by total demand
+    top_dimensions = grouped.groupby(dimension)['qty'].sum().nlargest(10).index
+    grouped = grouped[grouped[dimension].isin(top_dimensions)]
+    
+    return grouped
 
 
 # === Caching for Aggregated Chart Data ===
@@ -1241,11 +1355,143 @@ else:
             'order_reason': f_order_reason if 'f_order_reason' in locals() else []
         }
 
-# === Tabbed Interface ===
-tab_service, tab_debug = st.tabs([
-    f"{report_view}", 
-    "Debug Log" 
-])
+# === GROUP 6D: Demand Forecasting Report ===
+if report_view == "📈 Demand Forecasting":
+    st.header("📈 Demand Forecasting & Planning")
+    st.markdown("Forecast future demand based on historical order trends and vendor lead times.")
+    
+    # Get lead time lookup
+    lead_time_lookup = st.session_state.get('lead_time_lookup', {})
+    
+    # Configuration options in sidebar
+    col_forecast_1, col_forecast_2, col_forecast_3 = st.columns(3)
+    
+    with col_forecast_1:
+        ma_window = st.selectbox(
+            "📊 Moving Average Window",
+            options=[60, 120, 240, 360],
+            index=1,
+            help="Use 60 days for short-term trend, 360 for long-term"
+        )
+    
+    with col_forecast_2:
+        group_dimension = st.selectbox(
+            "📂 Group By",
+            options=['Overall', 'Category', 'Customer', 'Sales Org'],
+            help="View demand by different business dimensions"
+        )
+    
+    with col_forecast_3:
+        auto_horizon = st.checkbox(
+            "🎯 Auto Horizon",
+            value=True,
+            help="Use vendor lead times for forecast horizon"
+        )
+    
+    # Calculate forecast
+    orders_data = st.session_state.get('backorder_data', pd.DataFrame())
+    if orders_data.empty:
+        st.warning("No orders data available for forecasting.")
+    else:
+        try:
+            # Determine forecast horizon
+            if auto_horizon:
+                avg_lead_time = np.mean([v['lead_time_days'] for v in lead_time_lookup.values()]) if lead_time_lookup else 90
+                forecast_horizon = int(avg_lead_time)
+            else:
+                forecast_horizon = 90
+            
+            forecast_result = calculate_demand_forecast(
+                orders_data,
+                ma_window_days=ma_window,
+                forecast_horizon_days=forecast_horizon,
+                group_by=group_dimension.lower()
+            )
+            
+            if isinstance(forecast_result, dict):
+                forecast_df = forecast_result['data']
+                st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
+                st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
+                st.metric("Forecast Horizon", f"{forecast_result['forecast_horizon']} days")
+                
+                st.divider()
+                
+                # Plot forecast
+                st.subheader("Demand Trend & Forecast")
+                
+                # Prepare data for visualization
+                historical = forecast_df[forecast_df['type'] == 'historical'].tail(365)
+                forecast_data = forecast_df[forecast_df['type'] == 'forecast']
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=historical['date'],
+                    y=historical['daily_qty'],
+                    name='Historical Demand',
+                    mode='lines',
+                    line=dict(color='blue', width=2)
+                ))
+                fig.add_trace(go.Scatter(
+                    x=historical['date'],
+                    y=historical['ma'],
+                    name=f'Moving Avg ({ma_window}d)',
+                    mode='lines',
+                    line=dict(color='green', width=2, dash='dash')
+                ))
+                fig.add_trace(go.Scatter(
+                    x=forecast_data['date'],
+                    y=forecast_data['daily_qty'],
+                    name='Forecast',
+                    mode='lines',
+                    line=dict(color='orange', width=2, dash='dot'),
+                    fill='tozeroy'
+                ))
+                fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
+                fig.update_xaxes(title_text="Date")
+                fig.update_yaxes(title_text="Daily Demand (Units)")
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show forecast summary
+                st.subheader("Forecast Summary")
+                col_summary_1, col_summary_2, col_summary_3 = st.columns(3)
+                recent_avg = historical['daily_qty'].tail(30).mean()
+                historical_avg = historical['daily_qty'].mean()
+                forecast_avg = forecast_data['daily_qty'].mean()
+                
+                with col_summary_1:
+                    st.metric("Recent Avg (30d)", f"{recent_avg:.0f}", f"{((recent_avg/historical_avg - 1)*100):+.1f}%")
+                with col_summary_2:
+                    st.metric("Historical Avg", f"{historical_avg:.0f}")
+                with col_summary_3:
+                    st.metric("Forecast Avg", f"{forecast_avg:.0f}")
+                
+        except Exception as e:
+            st.error(f"Error generating forecast: {str(e)[:100]}")
+            st.info("Check the Debug Log for data quality issues.")
+    
+    # Export options
+    st.divider()
+    st.subheader("Export Forecast Data")
+    if not forecast_df.empty:
+        export_dict = {'Demand_Forecast': (forecast_df, False)}
+        try:
+            excel_export = get_filtered_data_as_excel(export_dict)
+            st.download_button(
+                label="📥 Download Forecast as Excel",
+                data=excel_export,
+                file_name=f"Demand_Forecast_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheet.sheet"
+            )
+        except Exception as e:
+            st.warning(f"Could not generate export: {e}")
+
+else:
+    # === Tabbed Interface for standard reports ===
+    tab_service, tab_debug = st.tabs([
+        f"{report_view}", 
+        "Debug Log" 
+    ])
+
 
 if report_view == "Service Level":
     # --- Apply filters for THIS view ---
