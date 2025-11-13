@@ -76,6 +76,43 @@ def get_filtered_data_as_excel(dfs_to_export_dict):
     return processed_data
 
 
+def enrich_orders_with_category(orders_df: pd.DataFrame, master_data_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enrich orders data with category information from master data.
+    
+    Joins orders data (which has 'sku' column) with master data to add 'category'
+    column using the PLM: Level Classification 4 field. This enables category
+    filtering for demand forecasting and other reports.
+    
+    Args:
+        orders_df: Orders dataframe with 'sku' column
+        master_data_df: Master data dataframe with 'sku' and 'category' columns
+    
+    Returns:
+        Orders dataframe with 'category' column added via left join
+    """
+    if orders_df.empty or master_data_df.empty:
+        return orders_df
+    
+    # Ensure both dataframes have the required columns
+    if 'sku' not in orders_df.columns or 'sku' not in master_data_df.columns:
+        return orders_df
+    
+    # Left join orders with master data to get category
+    # Using left join so we keep all orders even if SKU not in master data
+    result = orders_df.merge(
+        master_data_df[['sku', 'category']],
+        on='sku',
+        how='left'
+    )
+    
+    # Fill any missing categories with 'Unknown'
+    if 'category' in result.columns:
+        result['category'] = result['category'].fillna('Unknown')
+    
+    return result
+
+
 def get_filtered_data_as_excel_with_metadata(dfs_to_export_dict, metadata_dict=None, formatting_config=None):
     """
     Enhanced export function that includes metadata sheet with filter criteria and formatting options.

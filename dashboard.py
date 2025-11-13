@@ -1361,10 +1361,17 @@ else:
     elif report_view == "Backorder Report":
         filter_source_df = backorder_data
     elif report_view == "📈 Demand Forecasting":
-        # For Demand Forecasting, use orders data for filters
+        # For Demand Forecasting, use orders data enriched with category from master data
         try:
-            from data_loader import load_orders_item_lookup
+            from data_loader import load_orders_item_lookup, load_master_data
+            from utils import enrich_orders_with_category
+            
             filter_source_df = load_orders_item_lookup(ORDERS_FILE_PATH)[1]  # Get the dataframe part
+            
+            # Enrich with category ONLY for this report's filter source
+            master_data = load_master_data(MASTER_DATA_FILE_PATH)[1]
+            if not master_data.empty:
+                filter_source_df = enrich_orders_with_category(filter_source_df, master_data)
         except Exception as e:
             st.warning(f"Could not load orders data for filters: {e}")
             filter_source_df = pd.DataFrame()
@@ -1516,9 +1523,17 @@ if report_view == "📈 Demand Forecasting":
     try:
         # Try to get orders data - this is aggregated order-level data with order_date and ordered_qty
         # Re-load from source if not in session state
-        from data_loader import load_orders_item_lookup
+        from data_loader import load_orders_item_lookup, load_master_data
+        from utils import enrich_orders_with_category
         
         orders_data = load_orders_item_lookup(ORDERS_FILE_PATH)[1]  # Get the dataframe part
+        
+        # Load master data to enrich orders with category information
+        master_data = load_master_data(MASTER_DATA_FILE_PATH)[1]  # Get the dataframe part
+        
+        # Enrich orders with category from master data (required for category filtering)
+        if not master_data.empty:
+            orders_data = enrich_orders_with_category(orders_data, master_data)
         
         if orders_data.empty:
             st.warning("No orders data available for forecasting.")
