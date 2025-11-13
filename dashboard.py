@@ -1890,119 +1890,122 @@ elif report_view == "Inventory Management":
                 }), use_container_width=True)
 
 
-# --- Tab 6: Debug Log ---
-with tab_debug:
-    st.header("Data Loader Debug Log")
-    error_reports = st.session_state.get('error_reports', {})
+# --- Tab 6: Debug Log (Only for standard reports, not Demand Forecasting) ---
+# Debug tab is only created for Service Level, Backorder Report, and Inventory Management
+# Demand Forecasting has its own separate error handling
+if report_view != "📈 Demand Forecasting":
+    with tab_debug:
+        st.header("Data Loader Debug Log")
+        error_reports = st.session_state.get('error_reports', {})
 
-    if error_reports:
-        st.error("Actionable data quality issues were found during loading.")
-        try:
-            error_excel_data = get_filtered_data_as_excel(error_reports)
-            st.download_button(
-                label="Download Data Quality Report (Errors & Mismatches)",
-                data=error_excel_data,
-                file_name="Data_Quality_Report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheet.sheet"
-            )
-        except Exception as e:
-            st.error("An error occurred while generating the Error Report.")
-            st.exception(e)
+        if error_reports:
+            st.error("Actionable data quality issues were found during loading.")
+            try:
+                error_excel_data = get_filtered_data_as_excel(error_reports)
+                st.download_button(
+                    label="Download Data Quality Report (Errors & Mismatches)",
+                    data=error_excel_data,
+                    file_name="Data_Quality_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheet.sheet"
+                )
+            except Exception as e:
+                st.error("An error occurred while generating the Error Report.")
+                st.exception(e)
+            st.divider()
+        else:
+            st.success("No data quality errors or mismatches found.")
+            st.divider()
+
+        st.header("🕵️ Line/Bar Graph Debugger")
+        st.info("This section checks for common issues that prevent line/bar graphs from rendering.")
+
+        def check_graph_df(df: pd.DataFrame, name: str, required_cols: list) -> list:
+            """
+            Validate a dataframe for graph rendering.
+            
+            Checks if a dataframe is empty and if all required columns are
+            present. Used by the Debug Tab to identify data issues.
+            
+            Args:
+                df: Dataframe to validate
+                name: Display name for the dataframe (used in error messages)
+                required_cols: List of column names that must be present
+            
+            Returns:
+                List of validation messages (issues or success)
+            """
+            issues = []
+            if df.empty:
+                issues.append(f"❌ {name} dataframe is EMPTY.")
+            for col in required_cols:
+                if col not in df.columns:
+                    issues.append(f"❌ Column '{col}' missing in {name}.")
+            if not issues:
+                issues.append(f"✅ {name} dataframe OK for graphing.")
+            return issues
+
+        # --- Org #4: Use DEBUG_COLUMNS constants for maintainability ---
+        # Service Level Graphs
+        st.subheader("Service Level Graphs")
+        for issue in check_graph_df(service_data, "service_data", DEBUG_COLUMNS['service_data']):
+            st.write(issue)
+        
+        # Cache service customer data
+        if 'service_customer_debug' not in st.session_state['cached_debug_aggregations']:
+            st.session_state['cached_debug_aggregations']['service_customer_debug'] = get_service_customer_data(service_data)
+        for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_customer_debug'], "service_customer_data", DEBUG_COLUMNS['service_customer_data']):
+            st.write(issue)
+        
+        # Cache service monthly data
+        if 'service_monthly_debug' not in st.session_state['cached_debug_aggregations']:
+            st.session_state['cached_debug_aggregations']['service_monthly_debug'] = get_service_monthly_data(service_data)
+        for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_monthly_debug'], "service_monthly_data", DEBUG_COLUMNS['service_monthly_data']):
+            st.write(issue)
+
+        # Backorder Graphs
+        st.subheader("Backorder Graphs")
+        for issue in check_graph_df(backorder_data, "backorder_data", DEBUG_COLUMNS['backorder_data']):
+            st.write(issue)
+        
+        # Cache backorder customer data
+        if 'backorder_customer_debug' not in st.session_state['cached_debug_aggregations']:
+            st.session_state['cached_debug_aggregations']['backorder_customer_debug'] = get_backorder_customer_data(backorder_data)
+        for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_customer_debug'], "backorder_customer_data", DEBUG_COLUMNS['backorder_customer_data']):
+            st.write(issue)
+        
+        # Cache backorder item data
+        if 'backorder_item_debug' not in st.session_state['cached_debug_aggregations']:
+            st.session_state['cached_debug_aggregations']['backorder_item_debug'] = get_backorder_item_data(backorder_data)
+        for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_item_debug'], "backorder_item_data", DEBUG_COLUMNS['backorder_item_data']):
+            st.write(issue)
+
+        # Inventory Graphs
+        st.subheader("Inventory Graphs")
+        for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", DEBUG_COLUMNS['inventory_data']):
+            st.write(issue)
+        
+        # Cache inventory category data
+        if 'inventory_category_debug' not in st.session_state['cached_debug_aggregations']:
+            st.session_state['cached_debug_aggregations']['inventory_category_debug'] = get_inventory_category_data(inventory_analysis_data)
+        for issue in check_graph_df(st.session_state['cached_debug_aggregations']['inventory_category_debug'], "inventory_category_data", DEBUG_COLUMNS['inventory_category_data']):
+            st.write(issue)
+
         st.divider()
-    else:
-        st.success("No data quality errors or mismatches found.")
-        st.divider()
 
-    st.header("🕵️ Line/Bar Graph Debugger")
-    st.info("This section checks for common issues that prevent line/bar graphs from rendering.")
-
-    def check_graph_df(df: pd.DataFrame, name: str, required_cols: list) -> list:
-        """
-        Validate a dataframe for graph rendering.
-        
-        Checks if a dataframe is empty and if all required columns are
-        present. Used by the Debug Tab to identify data issues.
-        
-        Args:
-            df: Dataframe to validate
-            name: Display name for the dataframe (used in error messages)
-            required_cols: List of column names that must be present
-        
-        Returns:
-            List of validation messages (issues or success)
-        """
-        issues = []
-        if df.empty:
-            issues.append(f"❌ {name} dataframe is EMPTY.")
-        for col in required_cols:
-            if col not in df.columns:
-                issues.append(f"❌ Column '{col}' missing in {name}.")
-        if not issues:
-            issues.append(f"✅ {name} dataframe OK for graphing.")
-        return issues
-
-    # --- Org #4: Use DEBUG_COLUMNS constants for maintainability ---
-    # Service Level Graphs
-    st.subheader("Service Level Graphs")
-    for issue in check_graph_df(service_data, "service_data", DEBUG_COLUMNS['service_data']):
-        st.write(issue)
-    
-    # Cache service customer data
-    if 'service_customer_debug' not in st.session_state['cached_debug_aggregations']:
-        st.session_state['cached_debug_aggregations']['service_customer_debug'] = get_service_customer_data(service_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_customer_debug'], "service_customer_data", DEBUG_COLUMNS['service_customer_data']):
-        st.write(issue)
-    
-    # Cache service monthly data
-    if 'service_monthly_debug' not in st.session_state['cached_debug_aggregations']:
-        st.session_state['cached_debug_aggregations']['service_monthly_debug'] = get_service_monthly_data(service_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_monthly_debug'], "service_monthly_data", DEBUG_COLUMNS['service_monthly_data']):
-        st.write(issue)
-
-    # Backorder Graphs
-    st.subheader("Backorder Graphs")
-    for issue in check_graph_df(backorder_data, "backorder_data", DEBUG_COLUMNS['backorder_data']):
-        st.write(issue)
-    
-    # Cache backorder customer data
-    if 'backorder_customer_debug' not in st.session_state['cached_debug_aggregations']:
-        st.session_state['cached_debug_aggregations']['backorder_customer_debug'] = get_backorder_customer_data(backorder_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_customer_debug'], "backorder_customer_data", DEBUG_COLUMNS['backorder_customer_data']):
-        st.write(issue)
-    
-    # Cache backorder item data
-    if 'backorder_item_debug' not in st.session_state['cached_debug_aggregations']:
-        st.session_state['cached_debug_aggregations']['backorder_item_debug'] = get_backorder_item_data(backorder_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_item_debug'], "backorder_item_data", DEBUG_COLUMNS['backorder_item_data']):
-        st.write(issue)
-
-    # Inventory Graphs
-    st.subheader("Inventory Graphs")
-    for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", DEBUG_COLUMNS['inventory_data']):
-        st.write(issue)
-    
-    # Cache inventory category data
-    if 'inventory_category_debug' not in st.session_state['cached_debug_aggregations']:
-        st.session_state['cached_debug_aggregations']['inventory_category_debug'] = get_inventory_category_data(inventory_analysis_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['inventory_category_debug'], "inventory_category_data", DEBUG_COLUMNS['inventory_category_data']):
-        st.write(issue)
-
-    st.divider()
-
-    st.subheader("Loader Log Messages")
-    action_logs = [msg for msg in debug_logs if msg.startswith(("ERROR", "ADVICE", "WARNING"))]
-    info_logs = [msg for msg in debug_logs if msg.startswith("INFO")]
-    other_logs = [msg for msg in debug_logs if not msg.startswith(("ERROR", "ADVICE", "WARNING", "INFO"))]
-    for msg in action_logs:
-        if "ERROR" in msg or "ADVICE" in msg:
-            st.error(msg)
-        elif "WARNING" in msg:
-            st.warning(msg)
-    with st.expander("Show Full Info Log (Timings, Row Counts)"):
-        for msg in other_logs: 
-            st.info(msg)
-        for msg in info_logs:
-            st.info(msg)
+        st.subheader("Loader Log Messages")
+        action_logs = [msg for msg in debug_logs if msg.startswith(("ERROR", "ADVICE", "WARNING"))]
+        info_logs = [msg for msg in debug_logs if msg.startswith("INFO")]
+        other_logs = [msg for msg in debug_logs if not msg.startswith(("ERROR", "ADVICE", "WARNING", "INFO"))]
+        for msg in action_logs:
+            if "ERROR" in msg or "ADVICE" in msg:
+                st.error(msg)
+            elif "WARNING" in msg:
+                st.warning(msg)
+        with st.expander("Show Full Info Log (Timings, Row Counts)"):
+            for msg in other_logs: 
+                st.info(msg)
+            for msg in info_logs:
+                st.info(msg)
 
 # --- Sidebar Export Section ---
 st.sidebar.divider()
