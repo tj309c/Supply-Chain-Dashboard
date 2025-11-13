@@ -54,6 +54,37 @@ DEBUG_COLUMNS = {
     'inventory_category_data': ["total_on_hand", "avg_dio"],
 }
 
+# Anomaly Detection Thresholds (GROUP 6B) - 3 Sensitivity Levels
+ANOMALY_THRESHOLDS = {
+    'Conservative': {  # Strictest - catch more issues
+        'service_min_ontime_pct': 90,
+        'service_max_days_deliver': 7,
+        'service_customer_underperformance': 5,  # % below average
+        'backorder_max_days': 20,
+        'backorder_qty_spike_threshold': 30,  # % above average
+        'inventory_max_dio': 45,
+        'inventory_min_days_supply': 7,
+    },
+    'Normal': {  # Default - balanced
+        'service_min_ontime_pct': 85,
+        'service_max_days_deliver': 10,
+        'service_customer_underperformance': 10,
+        'backorder_max_days': 30,
+        'backorder_qty_spike_threshold': 50,
+        'inventory_max_dio': 60,
+        'inventory_min_days_supply': 5,
+    },
+    'Aggressive': {  # Lenient - catch only critical issues
+        'service_min_ontime_pct': 75,
+        'service_max_days_deliver': 15,
+        'service_customer_underperformance': 15,
+        'backorder_max_days': 45,
+        'backorder_qty_spike_threshold': 75,
+        'inventory_max_dio': 90,
+        'inventory_min_days_supply': 3,
+    }
+}
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Supply Chain Dashboard",
@@ -520,6 +551,128 @@ def get_month_over_month_kpis(df: pd.DataFrame, current_year_month: str, previou
     return result
 
 
+def detect_service_anomalies(df: pd.DataFrame, sensitivity: str = 'Normal') -> dict:
+    """
+    Detect service level anomalies based on sensitivity level (GROUP 6B).
+    
+    Flags issues like: low on-time %, delivery delays, customer underperformance.
+    
+    Args:
+        df: Service data dataframe with columns: 'on_time', 'days_to_deliver', 'customer_name'
+        sensitivity: 'Conservative', 'Normal', or 'Aggressive'
+    
+    Returns:
+        Dictionary with anomaly counts and details
+    """
+    thresholds = ANOMALY_THRESHOLDS.get(sensitivity, ANOMALY_THRESHOLDS['Normal'])
+    anomalies = {'count': 0, 'details': [], 'critical': 0}
+    
+    if df.empty:
+        return anomalies
+    
+    # Check overall on-time percentage
+    overall_ontime_pct = (df['on_time'].sum() / len(df) * 100) if len(df) > 0 else 0
+    if overall_ontime_pct < thresholds['service_min_ontime_pct']:
+        anomalies['count'] += 1
+        anomalies['critical'] += 1
+        anomalies['details'].append(f"🚨 On-Time % is {overall_ontime_pct:.1f}% (threshold: {thresholds['service_min_ontime_pct']}%)")
+    
+    # Check for delivery delays
+    avg_days = df['days_to_deliver'].mean() if len(df) > 0 else 0
+    if avg_days > thresholds['service_max_days_deliver']:
+        anomalies['count'] += 1
+        anomalies['critical'] += 1
+        anomalies['details'].append(f"🚨 Avg Delivery Time is {avg_days:.1f} days (threshold: {thresholds['service_max_days_deliver']} days)")
+    
+    # Check for underperforming customers
+    if 'customer_name' in df.columns:
+        customer_ontime = df.groupby('customer_name')['on_time'].apply(lambda x: x.mean() * 100 if len(x) > 0 else 0)
+        avg_customer_ontime = customer_ontime.mean()
+        underperformers = customer_ontime[customer_ontime < (avg_customer_ontime - thresholds['service_customer_underperformance'])]
+        if len(underperformers) > 0:
+            anomalies['count'] += len(underperformers)
+            for customer, pct in underperformers.head(5).items():
+                anomalies['details'].append(f"⚠️ Customer '{customer}' on-time: {pct:.1f}%")
+    
+    return anomalies
+
+
+def detect_backorder_anomalies(df: pd.DataFrame, sensitivity: str = 'Normal') -> dict:
+    """
+    Detect backorder anomalies (GROUP 6B).
+    
+    Flags issues like: aged backorders, quantity spikes.
+    
+    Args:
+        df: Backorder data dataframe with columns: 'days_on_backorder', 'backorder_qty'
+        sensitivity: 'Conservative', 'Normal', or 'Aggressive'
+    
+    Returns:
+        Dictionary with anomaly counts and details
+    """
+    thresholds = ANOMALY_THRESHOLDS.get(sensitivity, ANOMALY_THRESHOLDS['Normal'])
+    anomalies = {'count': 0, 'details': [], 'critical': 0}
+    
+    if df.empty:
+        return anomalies
+    
+    # Check for aged backorders
+    aged_bo = df[df['days_on_backorder'] > thresholds['backorder_max_days']]
+    if len(aged_bo) > 0:
+        anomalies['count'] += len(aged_bo)
+        anomalies['critical'] += len(aged_bo)
+        anomalies['details'].append(f"🚨 {len(aged_bo)} items stuck on BO for >{thresholds['backorder_max_days']} days")
+    
+    # Check for backorder quantity spikes
+    avg_qty = df['backorder_qty'].mean()
+    qty_spike_threshold = avg_qty * (1 + thresholds['backorder_qty_spike_threshold'] / 100)
+    spiked_items = df[df['backorder_qty'] > qty_spike_threshold]
+    if len(spiked_items) > 0:
+        anomalies['count'] += len(spiked_items)
+        anomalies['details'].append(f"⚠️ {len(spiked_items)} items with abnormal BO quantities")
+    
+    return anomalies
+
+
+def detect_inventory_anomalies(df: pd.DataFrame, sensitivity: str = 'Normal') -> dict:
+    """
+    Detect inventory anomalies (GROUP 6B).
+    
+    Flags issues like: slow-moving stock, stock-out risk.
+    
+    Args:
+        df: Inventory data dataframe with columns: 'avg_dio', 'on_hand_qty', 'daily_demand'
+        sensitivity: 'Conservative', 'Normal', or 'Aggressive'
+    
+    Returns:
+        Dictionary with anomaly counts and details
+    """
+    thresholds = ANOMALY_THRESHOLDS.get(sensitivity, ANOMALY_THRESHOLDS['Normal'])
+    anomalies = {'count': 0, 'details': [], 'critical': 0}
+    
+    if df.empty:
+        return anomalies
+    
+    # Check for excess stock (high DIO)
+    if 'avg_dio' in df.columns:
+        excess_stock = df[df['avg_dio'] > thresholds['inventory_max_dio']]
+        if len(excess_stock) > 0:
+            anomalies['count'] += len(excess_stock)
+            anomalies['details'].append(f"⚠️ {len(excess_stock)} items with DIO > {thresholds['inventory_max_dio']} days (slow movers)")
+    
+    # Check for stock-out risk (low days of supply)
+    if 'on_hand_qty' in df.columns and 'daily_demand' in df.columns:
+        df_temp = df[df['daily_demand'] > 0].copy()
+        df_temp['days_supply'] = df_temp['on_hand_qty'] / df_temp['daily_demand']
+        low_stock = df_temp[df_temp['days_supply'] < thresholds['inventory_min_days_supply']]
+        if len(low_stock) > 0:
+            anomalies['count'] += len(low_stock)
+            anomalies['critical'] += len(low_stock)
+            anomalies['details'].append(f"🚨 {len(low_stock)} items with <{thresholds['inventory_min_days_supply']} days supply (stock-out risk)")
+    
+    return anomalies
+
+
 def get_service_kpis(_f_service: pd.DataFrame) -> tuple[float, float, float]:
     """
     Calculate key performance indicators for Service Level report.
@@ -913,6 +1066,18 @@ if st.sidebar.button("🔄 Reset All Filters", use_container_width=True, help="C
 
 st.sidebar.divider()
 
+# --- GROUP 6B: Anomaly Detection Sensitivity Level ---
+anomaly_sensitivity = st.sidebar.selectbox(
+    "🔍 Anomaly Sensitivity",
+    options=["Conservative 🔒", "Normal ⚙️", "Aggressive 🚀"],
+    index=1,
+    help="Conservative: Catch more issues | Normal: Balanced (default) | Aggressive: Only critical issues"
+)
+# Extract sensitivity level name
+sensitivity_level = anomaly_sensitivity.split()[0]
+
+st.sidebar.divider()
+
 if report_view == "Inventory Management":
     # --- Inventory-specific filters ---
     st.sidebar.info("📊 This report shows the current inventory snapshot and has no filters.")
@@ -1050,6 +1215,17 @@ if report_view == "Service Level":
             kpi2.metric("On-Time (OT) %", f"{on_time_pct:.1f}%")
             kpi3.metric("Avg. Days to Deliver", f"{avg_days:.1f} days")
             
+            # --- GROUP 6B: Display Service Level Anomalies ---
+            service_anomalies = detect_service_anomalies(f_service, sensitivity_level)
+            if service_anomalies['count'] > 0:
+                col_anom_left, col_anom_right = st.columns([1, 3])
+                with col_anom_left:
+                    st.metric("🚨 Issues Detected", service_anomalies['count'])
+                with col_anom_right:
+                    with st.expander(f"View {service_anomalies['count']} Anomalies"):
+                        for detail in service_anomalies['details']:
+                            st.write(detail)
+            
             st.divider()
             
             if kpi_choice == "On-Time %":
@@ -1169,6 +1345,17 @@ elif report_view == "Backorder Report":
             kpi2.metric("Avg. Days on Backorder", f"{avg_bo_days:.1f} days")
             kpi3.metric("Total Sales Orders on BO", f"{unique_orders:,}")
             
+            # --- GROUP 6B: Display Backorder Anomalies ---
+            backorder_anomalies = detect_backorder_anomalies(f_backorder, sensitivity_level)
+            if backorder_anomalies['count'] > 0:
+                col_anom_left, col_anom_right = st.columns([1, 3])
+                with col_anom_left:
+                    st.metric("🚨 Issues Detected", backorder_anomalies['count'])
+                with col_anom_right:
+                    with st.expander(f"View {backorder_anomalies['count']} Anomalies"):
+                        for detail in backorder_anomalies['details']:
+                            st.write(detail)
+            
             st.divider()
             
             col1, col2 = st.columns(2)
@@ -1261,6 +1448,17 @@ elif report_view == "Inventory Management":
             kpi1, kpi2 = st.columns(2)
             kpi1.metric("Total On-Hand Stock", f"{total_on_hand:,.0f} units")
             kpi2.metric("Weighted Avg. DIO", f"{avg_dio:.1f} days")
+            
+            # --- GROUP 6B: Display Inventory Anomalies ---
+            inventory_anomalies = detect_inventory_anomalies(f_inventory, sensitivity_level)
+            if inventory_anomalies['count'] > 0:
+                col_anom_left, col_anom_right = st.columns([1, 3])
+                with col_anom_left:
+                    st.metric("🚨 Issues Detected", inventory_anomalies['count'])
+                with col_anom_right:
+                    with st.expander(f"View {inventory_anomalies['count']} Anomalies"):
+                        for detail in inventory_anomalies['details']:
+                            st.write(detail)
             
             st.divider()
             
