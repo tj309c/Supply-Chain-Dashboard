@@ -426,6 +426,100 @@ def display_kpis_mobile_friendly(kpi_data: dict, columns: int = 3) -> None:
         cols[idx % columns].metric(label, value)
 
 
+def calculate_trend(current_value: float, previous_value: float, metric_type: str = 'number') -> tuple[str, str]:
+    """
+    Calculate trend indicator and percentage change for KPI monitoring.
+    
+    Compares current vs previous period to show improvement/decline.
+    Trends are direction-aware (higher is better for On-Time %, lower is better for DIO).
+    
+    Args:
+        current_value: Current period metric value
+        previous_value: Previous period metric value
+        metric_type: Type of metric ('percentage', 'inventory', 'backorder', 'time') 
+                     determines trend direction interpretation
+    
+    Returns:
+        Tuple of (trend_symbol, percentage_change_text)
+        Example: ('📈', '+5.2% from last period') or ('📉', '-3.1% from last period')
+    """
+    if previous_value == 0:
+        return '—', 'No prior data'
+    
+    pct_change = ((current_value - previous_value) / abs(previous_value)) * 100
+    
+    # Determine if trend is good or bad based on metric type
+    if metric_type == 'percentage':  # Higher is better (On-Time %)
+        if pct_change > 1:
+            trend_symbol = '📈'
+        elif pct_change < -1:
+            trend_symbol = '📉'
+        else:
+            trend_symbol = '➡️'
+    elif metric_type == 'backorder':  # Lower is better (Days on BO)
+        if pct_change < -1:
+            trend_symbol = '📈'  # Improvement
+        elif pct_change > 1:
+            trend_symbol = '📉'  # Deterioration
+        else:
+            trend_symbol = '➡️'
+    elif metric_type == 'inventory':  # Lower DIO is better
+        if pct_change < -1:
+            trend_symbol = '📈'  # Improvement
+        elif pct_change > 1:
+            trend_symbol = '📉'  # Deterioration
+        else:
+            trend_symbol = '➡️'
+    else:  # Default: higher is better
+        if pct_change > 1:
+            trend_symbol = '📈'
+        elif pct_change < -1:
+            trend_symbol = '📉'
+        else:
+            trend_symbol = '➡️'
+    
+    change_text = f"{abs(pct_change):+.1f}%" if abs(pct_change) >= 0.1 else 'No change'
+    return trend_symbol, change_text
+
+
+def get_month_over_month_kpis(df: pd.DataFrame, current_year_month: str, previous_year_month: str, 
+                              metric_columns: list) -> dict:
+    """
+    Calculate month-over-month KPI comparison for trend analysis (GROUP 6A).
+    
+    Filters data for current and previous month, then computes specified metrics
+    for trend comparison.
+    
+    Args:
+        df: Dataframe with 'year_month' column (e.g., '2024-01')
+        current_year_month: Current period (e.g., '2024-01')
+        previous_year_month: Previous period (e.g., '2023-12')
+        metric_columns: List of metric column names to aggregate
+    
+    Returns:
+        Dictionary with {metric_name: {'current': val, 'previous': val, 'trend': emoji, 'change': percent_str}}
+    """
+    result = {}
+    
+    current_data = df[df.get('year_month', '') == current_year_month]
+    previous_data = df[df.get('year_month', '') == previous_year_month]
+    
+    for metric in metric_columns:
+        if metric in current_data.columns:
+            current_val = current_data[metric].sum() if metric in ['units_issued', 'on_time', 'backorder_qty'] else current_data[metric].mean()
+            previous_val = previous_data[metric].sum() if metric in ['units_issued', 'on_time', 'backorder_qty'] else previous_data[metric].mean()
+            
+            trend_symbol, change_text = calculate_trend(current_val, previous_val, metric_type='percentage' if 'pct' in metric else 'number')
+            result[metric] = {
+                'current': current_val,
+                'previous': previous_val,
+                'trend': trend_symbol,
+                'change': change_text
+            }
+    
+    return result
+
+
 def get_service_kpis(_f_service: pd.DataFrame) -> tuple[float, float, float]:
     """
     Calculate key performance indicators for Service Level report.
