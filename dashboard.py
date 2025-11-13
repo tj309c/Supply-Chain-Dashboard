@@ -64,10 +64,10 @@ st.set_page_config(
 # --- File Paths ---
 # Support both environment variables and local/relative paths
 # Set env vars to override defaults: e.g., export ORDERS_FILE_PATH="/path/to/ORDERS.csv"
-ORDERS_FILE_PATH = os.environ.get("ORDERS_FILE_PATH", "ORDERS.csv")
-DELIVERIES_FILE_PATH = os.environ.get("DELIVERIES_FILE_PATH", "DELIVERIES.csv")
-MASTER_DATA_FILE_PATH = os.environ.get("MASTER_DATA_FILE_PATH", "Master Data.csv")
-INVENTORY_FILE_PATH = os.environ.get("INVENTORY_FILE_PATH", "INVENTORY.csv")
+ORDERS_FILE_PATH = os.environ.get("ORDERS_FILE_PATH", "data/ORDERS.csv")
+DELIVERIES_FILE_PATH = os.environ.get("DELIVERIES_FILE_PATH", "data/DELIVERIES.csv")
+MASTER_DATA_FILE_PATH = os.environ.get("MASTER_DATA_FILE_PATH", "data/Master Data.csv")
+INVENTORY_FILE_PATH = os.environ.get("INVENTORY_FILE_PATH", "data/INVENTORY.csv")
 
 # === FILE CHECKER & UPLOADER ===
 # Check that all files exist; if missing, offer upload fallback
