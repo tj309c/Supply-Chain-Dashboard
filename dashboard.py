@@ -951,6 +951,62 @@ def aggregate_forecast_by_dimension(orders_df: pd.DataFrame, ma_window_days: int
     return grouped
 
 
+def remove_demand_anomalies(daily_demand_df: pd.DataFrame, sensitivity: str = 'Normal') -> pd.DataFrame:
+    """
+    Remove statistical anomalies (outliers) from daily demand data (GROUP 6D Enhancement).
+    
+    Uses interquartile range (IQR) method to identify and remove non-recurring demand spikes/drops.
+    Anomalies are replaced with interpolated values based on surrounding data.
+    
+    Args:
+        daily_demand_df: DataFrame with 'date' and 'daily_qty' columns
+        sensitivity: 'Aggressive' (only extreme outliers), 'Normal' (balanced), or 'Conservative' (more removal)
+    
+    Returns:
+        DataFrame with anomalies removed and interpolated
+    """
+    if daily_demand_df.empty or 'daily_qty' not in daily_demand_df.columns:
+        return daily_demand_df
+    
+    df = daily_demand_df.copy()
+    
+    # Define IQR multipliers for each sensitivity level
+    # Higher multiplier = fewer anomalies removed (only extreme outliers)
+    # Lower multiplier = more anomalies removed (catches more deviations)
+    iqr_multipliers = {
+        'Aggressive': 3.0,      # Only remove extreme outliers (3× IQR)
+        'Normal': 1.5,          # Balanced (1.5× IQR) - default
+        'Conservative': 0.75    # Remove more deviations (0.75× IQR)
+    }
+    
+    multiplier = iqr_multipliers.get(sensitivity, 1.5)
+    
+    # Calculate quartiles and IQR
+    Q1 = df['daily_qty'].quantile(0.25)
+    Q3 = df['daily_qty'].quantile(0.75)
+    IQR = Q3 - Q1
+    
+    # Define outlier bounds
+    lower_bound = Q1 - (multiplier * IQR)
+    upper_bound = Q3 + (multiplier * IQR)
+    
+    # Mark anomalies
+    anomaly_mask = (df['daily_qty'] < lower_bound) | (df['daily_qty'] > upper_bound)
+    anomaly_count = anomaly_mask.sum()
+    
+    # Replace anomalies with NaN for interpolation
+    df.loc[anomaly_mask, 'daily_qty'] = np.nan
+    
+    # Interpolate missing values (linear interpolation preserves trend)
+    df['daily_qty'] = df['daily_qty'].interpolate(method='linear', limit_direction='both')
+    
+    # Store metadata for user feedback
+    df.attrs['anomalies_removed'] = anomaly_count
+    df.attrs['bounds'] = {'lower': lower_bound, 'upper': upper_bound}
+    
+    return df
+
+
 # === Caching for Aggregated Chart Data ===
 # This second layer of caching stores the results of the groupby operations.
 # It makes the dashboard feel instantaneous when switching between tabs or KPIs
@@ -1420,7 +1476,30 @@ if report_view == "📈 Demand Forecasting":
             help="Use vendor lead times for forecast horizon"
         )
     
-    # Get orders data (all customer orders - primary demand signal)
+    # --- NEW: Anomaly Removal Settings (Statistical Outlier Detection) ---
+    st.divider()
+    st.subheader("📊 Data Cleaning & Anomaly Removal")
+    st.markdown("Remove statistical anomalies (one-time spikes/drops) from forecast")
+    
+    col_anom_1, col_anom_2 = st.columns(2)
+    
+    with col_anom_1:
+        remove_anomalies = st.checkbox(
+            "🔍 Remove Statistical Anomalies",
+            value=False,
+            help="Filter out non-recurring demand spikes/drops based on statistical deviation"
+        )
+    
+    with col_anom_2:
+        if remove_anomalies:
+            anomaly_sensitivity = st.selectbox(
+                "📈 Sensitivity Level",
+                options=['Aggressive 🚀', 'Normal ⚙️', 'Conservative 🔒'],
+                index=1,
+                help="Aggressive: Remove extreme outliers only | Normal: Balanced | Conservative: Remove more deviations"
+            )
+        else:
+            anomaly_sensitivity = None
     # Note: Sourced from ORDERS.csv via load_orders_item_lookup in load_all_data()
     orders_item_data = st.session_state.get('master_data', pd.DataFrame())  # This gets populated during data load
     
@@ -1460,6 +1539,34 @@ if report_view == "📈 Demand Forecasting":
                     
                     if isinstance(forecast_result, dict):
                         forecast_df = forecast_result['data']
+                        
+                        # --- Apply anomaly removal if enabled ---
+                        if remove_anomalies and anomaly_sensitivity:
+                            # Extract sensitivity level (remove emoji for function call)
+                            sensitivity_level = anomaly_sensitivity.split()[0]  # Gets 'Aggressive', 'Normal', or 'Conservative'
+                            
+                            # Get historical data only (don't modify forecast)
+                            historical_data = forecast_df[forecast_df['type'] == 'historical'].copy()
+                            forecast_data_part = forecast_df[forecast_df['type'] == 'forecast'].copy()
+                            
+                            # Apply anomaly removal to historical data
+                            historical_cleaned = remove_demand_anomalies(historical_data, sensitivity=sensitivity_level)
+                            
+                            # Recalculate metrics with cleaned data
+                            anomalies_found = historical_cleaned.attrs.get('anomalies_removed', 0)
+                            bounds = historical_cleaned.attrs.get('bounds', {})
+                            
+                            # Show anomaly removal info
+                            if anomalies_found > 0:
+                                st.info(f"✅ Removed {anomalies_found} statistical anomalies ({sensitivity_level} sensitivity)")
+                                with st.expander("📊 Anomaly Details"):
+                                    st.write(f"**Lower Bound:** {bounds.get('lower', 'N/A'):.0f} units")
+                                    st.write(f"**Upper Bound:** {bounds.get('upper', 'N/A'):.0f} units")
+                                    st.write(f"**Method:** Interquartile Range (IQR) with {['3.0×', '1.5×', '0.75×'][['Aggressive', 'Normal', 'Conservative'].index(sensitivity_level)]} multiplier")
+                            
+                            # Rebuild forecast_df with cleaned historical data
+                            forecast_df = pd.concat([historical_cleaned, forecast_data_part], ignore_index=True)
+                        
                         st.metric("Avg Daily Demand (Moving Avg)", f"{forecast_result['latest_daily_avg']:.0f} units/day")
                         st.metric("Trend", f"{forecast_result['trend']} ({forecast_result['trend_pct']:+.1f}%)")
                         st.metric("Forecast Horizon", f"{forecast_result['forecast_horizon']} days")
