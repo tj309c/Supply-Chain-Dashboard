@@ -534,6 +534,7 @@ if report_view == "Service Level":
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader(f"Units & {kpi_name} by Customer (Top 10)")
+                cust_svc = pd.DataFrame()
                 try:
                     cust_svc = get_service_customer_data(f_service)
                     if cust_svc.empty:
@@ -549,12 +550,14 @@ if report_view == "Service Level":
                 except Exception as e:
                     st.error(f"Error generating customer chart: {e}")
                 
-                st.dataframe(cust_svc.style.format({
-                    'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
-                }), use_container_width=True)
+                if not cust_svc.empty:
+                    st.dataframe(cust_svc.style.format({
+                        'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
+                    }), use_container_width=True)
 
             with col2:
                 st.subheader(f"Monthly Units & {kpi_name}")
+                month_svc = pd.DataFrame()
                 try:
                     month_svc = get_service_monthly_data(f_service)
                     if month_svc.empty:
@@ -570,10 +573,10 @@ if report_view == "Service Level":
                 except Exception as e:
                     st.error(f"Error generating monthly chart: {e}")
                 
-                # --- UPDATED: Use ship_month ---
-                st.dataframe(month_svc[['ship_month', 'total_units', 'on_time_pct', 'avg_days']].style.format({
-                    'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
-                }), use_container_width=True, hide_index=True)
+                if not month_svc.empty:
+                    st.dataframe(month_svc[['ship_month', 'total_units', 'on_time_pct', 'avg_days']].style.format({
+                        'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
+                    }), use_container_width=True, hide_index=True)
 
 elif report_view == "Backorder Report":
     # --- Apply filters for THIS view ---
@@ -619,6 +622,7 @@ elif report_view == "Backorder Report":
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Backorder Qty by Customer (Top 10)")
+                cust_bo = pd.DataFrame()
                 try:
                     cust_bo = get_backorder_customer_data(f_backorder)
                     if cust_bo.empty:
@@ -634,10 +638,12 @@ elif report_view == "Backorder Report":
                 except Exception as e:
                     st.error(f"Error generating customer chart: {e}")
                 
-                st.dataframe(cust_bo.style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
+                if not cust_bo.empty:
+                    st.dataframe(cust_bo.style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
 
             with col2: # --- NEW: Add a chart for the item data ---
                 st.subheader("Backorder Qty by Item (Top 10)")
+                item_bo_chart = pd.DataFrame()
                 try:
                     item_bo_chart = get_backorder_item_data(f_backorder)
                     if item_bo_chart.empty:
@@ -649,7 +655,8 @@ elif report_view == "Backorder Report":
                 except Exception as e:
                     st.error(f"Error generating item chart: {e}")
 
-                st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
+                if not item_bo_chart.empty:
+                    st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
 
 elif report_view == "Inventory Management":
     # --- Apply filters for THIS view ---
@@ -683,6 +690,7 @@ elif report_view == "Inventory Management":
             st.divider()
             
             st.subheader("On-Hand Stock & DIO by Category")
+            inv_by_cat = pd.DataFrame()
             try:
                 inv_by_cat = get_inventory_category_data(f_inventory)
                 if inv_by_cat.empty:
@@ -699,10 +707,11 @@ elif report_view == "Inventory Management":
             except Exception as e:
                 st.error(f"Error generating inventory chart: {e}")
             
-            st.dataframe(inv_by_cat.style.format({
-                'total_on_hand': '{:,.0f}', 
-                'avg_dio': '{:.1f}'
-            }), use_container_width=True)
+            if not inv_by_cat.empty:
+                st.dataframe(inv_by_cat.style.format({
+                    'total_on_hand': '{:,.0f}', 
+                    'avg_dio': '{:.1f}'
+                }), use_container_width=True)
 
 
 # --- Tab 6: Debug Log ---
