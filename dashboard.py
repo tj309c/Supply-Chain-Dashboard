@@ -228,13 +228,38 @@ if 'last_load_time' in st.session_state:
 if 'data_loaded' not in st.session_state or not st.session_state.get('data_loaded'):
     load_all_data()
 
-# --- NEW: Initialize report-specific filter states ---
+# --- NEW: Initialize report-specific filter states and caches ---
 if f'active_filters_Service Level' not in st.session_state:
     st.session_state[f'active_filters_Service Level'] = {}
 if f'active_filters_Backorder Report' not in st.session_state:
     st.session_state[f'active_filters_Backorder Report'] = {}
 if f'active_filters_Inventory Management' not in st.session_state:
     st.session_state[f'active_filters_Inventory Management'] = {}
+
+# --- NEW: Initialize performance caches per report (Perf #1, #2, #4) ---
+# Year-month map cache (per report)
+if 'cached_year_month_map_Service Level' not in st.session_state:
+    st.session_state['cached_year_month_map_Service Level'] = {}
+if 'cached_year_month_map_Backorder Report' not in st.session_state:
+    st.session_state['cached_year_month_map_Backorder Report'] = {}
+
+# Debug tab aggregation cache (Perf #1)
+if 'cached_debug_aggregations' not in st.session_state:
+    st.session_state['cached_debug_aggregations'] = {}
+
+# Filter state comparison cache (Perf #4) - per report
+if 'cached_filter_state_Service Level' not in st.session_state:
+    st.session_state['cached_filter_state_Service Level'] = None
+if 'cached_filter_state_Backorder Report' not in st.session_state:
+    st.session_state['cached_filter_state_Backorder Report'] = None
+if 'cached_filter_changed_Service Level' not in st.session_state:
+    st.session_state['cached_filter_changed_Service Level'] = False
+if 'cached_filter_changed_Backorder Report' not in st.session_state:
+    st.session_state['cached_filter_changed_Backorder Report'] = False
+
+# Track the last active report to clear caches when switching (Perf #2, #4)
+if 'last_active_report' not in st.session_state:
+    st.session_state['last_active_report'] = None
 
 # --- NEW: Use data from session state as the primary source ---
 master_data = st.session_state.get('master_data', pd.DataFrame())
@@ -263,6 +288,16 @@ report_view = st.sidebar.radio(
     "Choose a report to view:",
     ("Service Level", "Backorder Report", "Inventory Management")
 )
+
+# --- NEW: Auto-clear caches when switching reports (Perf #2, #4) ---
+if st.session_state.get('last_active_report') != report_view:
+    # Clear the year-month map cache for this report
+    st.session_state[f'cached_year_month_map_{report_view}'] = {}
+    # Clear the filter state cache for this report
+    st.session_state[f'cached_filter_state_{report_view}'] = None
+    st.session_state[f'cached_filter_changed_{report_view}'] = False
+    # Update the last active report
+    st.session_state['last_active_report'] = report_view
 
 # === Caching for KPI Calculations ===
 # By caching the main KPI calculations, the dashboard will feel more responsive
@@ -426,16 +461,26 @@ else:
     else:
         filter_source_df = pd.DataFrame()
 
-    # --- NEW: Generate filter options on-the-fly from the correct source ---
+    # --- NEW: Generate filter options on-the-fly from the correct source (with caching - Perf #2) ---
     all_years = []
     year_month_map = {}
-    if not filter_source_df.empty and 'order_date' in filter_source_df.columns:
+    
+    # Check if we have a cached year-month map for this report
+    cached_map = st.session_state.get(f'cached_year_month_map_{report_view}', {})
+    if cached_map and not filter_source_df.empty and 'order_date' in filter_source_df.columns:
+        # Use cached map
+        year_month_map = cached_map
+        all_years = sorted(list(year_month_map.keys()), reverse=True)
+    elif not filter_source_df.empty and 'order_date' in filter_source_df.columns:
+        # Build and cache the year-month map
         all_years = sorted(list(filter_source_df['order_date'].dt.year.dropna().astype(int).unique()), reverse=True)
         date_df = filter_source_df[['order_date']].dropna().drop_duplicates()
         date_df['year'] = date_df['order_date'].dt.year
         date_df['month_name'] = date_df['order_date'].dt.month_name()
         date_df['month_num'] = date_df['order_date'].dt.month
         year_month_map = date_df.groupby('year')[['month_num', 'month_name']].apply(lambda x: x.drop_duplicates().sort_values('month_num')['month_name'].tolist()).to_dict()
+        # Cache it for next time
+        st.session_state[f'cached_year_month_map_{report_view}'] = year_month_map
 
     f_year = st.sidebar.selectbox("Select Order Year:", ["All"] + all_years, key="year")
 
@@ -491,7 +536,7 @@ if report_view == "Service Level":
 
     # --- Tab 1: Service Level ---
     with tab_service:
-        # --- UPDATED: Show a message if filters have changed but not been applied ---
+        # --- UPDATED: Show a message if filters have changed but not been applied (with caching - Perf #4) ---
         # We create a dictionary from the current widget state to compare (only if not in inventory view)
         if report_view != "Inventory Management":
             current_widget_state = {
@@ -500,8 +545,13 @@ if report_view == "Service Level":
                 'order_type': f_order_type, 'order_reason': [] # No order reason on service
             }
             active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-        if report_view != "Inventory Management" and current_widget_state != active_filters:
-            st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
+            
+            # Check cache (Perf #4: avoid redundant dictionary comparisons)
+            if current_widget_state != active_filters:
+                st.session_state[f'cached_filter_changed_{report_view}'] = True
+                st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
+            else:
+                st.session_state[f'cached_filter_changed_{report_view}'] = False
 
         st.header("Service Level Performance (Shipped Orders)")
         dfs_to_export = {} # Initialize here
@@ -591,7 +641,7 @@ elif report_view == "Backorder Report":
     f_inventory = inventory_analysis_data
 
     with tab_service:
-        # --- UPDATED: Show a message if filters have changed but not been applied ---
+        # --- UPDATED: Show a message if filters have changed but not been applied (with caching - Perf #4) ---
         if report_view != "Inventory Management":
             current_widget_state = {
                 'order_year': f_year, 'order_month': f_month, 'customer_name': f_customer,
@@ -599,8 +649,13 @@ elif report_view == "Backorder Report":
                 'order_type': f_order_type, 'order_reason': f_order_reason  # Safe: f_order_reason defined for all reports
             }
             active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-        if report_view != "Inventory Management" and current_widget_state != active_filters:
-            st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
+            
+            # Check cache (Perf #4: avoid redundant dictionary comparisons)
+            if current_widget_state != active_filters:
+                st.session_state[f'cached_filter_changed_{report_view}'] = True
+                st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
+            else:
+                st.session_state[f'cached_filter_changed_{report_view}'] = False
 
         st.header("Backorder Analysis (Unfulfilled Orders)")
         dfs_to_export = {} # Initialize here
@@ -754,29 +809,50 @@ with tab_debug:
             issues.append(f"✅ {name} dataframe OK for graphing.")
         return issues
 
+    # --- NEW: Cache debug aggregations (Perf #1) to avoid recalculating on every debug tab view ---
     # Service Level Graphs
     st.subheader("Service Level Graphs")
     for issue in check_graph_df(service_data, "service_data", ["units_issued", "on_time", "days_to_deliver", "customer_name", "ship_month"]):
         st.write(issue)
-    for issue in check_graph_df(get_service_customer_data(service_data), "service_customer_data", ["total_units", "on_time_pct", "avg_days"]):
+    
+    # Cache service customer data
+    if 'service_customer_debug' not in st.session_state['cached_debug_aggregations']:
+        st.session_state['cached_debug_aggregations']['service_customer_debug'] = get_service_customer_data(service_data)
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_customer_debug'], "service_customer_data", ["total_units", "on_time_pct", "avg_days"]):
         st.write(issue)
-    for issue in check_graph_df(get_service_monthly_data(service_data), "service_monthly_data", ["ship_month", "total_units", "on_time_pct", "avg_days"]):
+    
+    # Cache service monthly data
+    if 'service_monthly_debug' not in st.session_state['cached_debug_aggregations']:
+        st.session_state['cached_debug_aggregations']['service_monthly_debug'] = get_service_monthly_data(service_data)
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_monthly_debug'], "service_monthly_data", ["ship_month", "total_units", "on_time_pct", "avg_days"]):
         st.write(issue)
 
     # Backorder Graphs
     st.subheader("Backorder Graphs")
     for issue in check_graph_df(backorder_data, "backorder_data", ["backorder_qty", "days_on_backorder", "customer_name", "product_name"]):
         st.write(issue)
-    for issue in check_graph_df(get_backorder_customer_data(backorder_data), "backorder_customer_data", ["total_bo_qty", "avg_days_on_bo"]):
+    
+    # Cache backorder customer data
+    if 'backorder_customer_debug' not in st.session_state['cached_debug_aggregations']:
+        st.session_state['cached_debug_aggregations']['backorder_customer_debug'] = get_backorder_customer_data(backorder_data)
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_customer_debug'], "backorder_customer_data", ["total_bo_qty", "avg_days_on_bo"]):
         st.write(issue)
-    for issue in check_graph_df(get_backorder_item_data(backorder_data), "backorder_item_data", ["product_name", "total_bo_qty", "avg_days_on_bo"]):
+    
+    # Cache backorder item data
+    if 'backorder_item_debug' not in st.session_state['cached_debug_aggregations']:
+        st.session_state['cached_debug_aggregations']['backorder_item_debug'] = get_backorder_item_data(backorder_data)
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_item_debug'], "backorder_item_data", ["product_name", "total_bo_qty", "avg_days_on_bo"]):
         st.write(issue)
 
     # Inventory Graphs
     st.subheader("Inventory Graphs")
     for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", ["on_hand_qty", "daily_demand", "category"]):
         st.write(issue)
-    for issue in check_graph_df(get_inventory_category_data(inventory_analysis_data), "inventory_category_data", ["total_on_hand", "avg_dio"]):
+    
+    # Cache inventory category data
+    if 'inventory_category_debug' not in st.session_state['cached_debug_aggregations']:
+        st.session_state['cached_debug_aggregations']['inventory_category_debug'] = get_inventory_category_data(inventory_analysis_data)
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['inventory_category_debug'], "inventory_category_data", ["total_on_hand", "avg_dio"]):
         st.write(issue)
 
     st.divider()
