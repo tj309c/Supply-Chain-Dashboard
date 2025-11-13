@@ -1360,6 +1360,14 @@ else:
         filter_source_df = service_data
     elif report_view == "Backorder Report":
         filter_source_df = backorder_data
+    elif report_view == "📈 Demand Forecasting":
+        # For Demand Forecasting, use orders data for filters
+        try:
+            from data_loader import load_orders_item_lookup
+            filter_source_df = load_orders_item_lookup(ORDERS_FILE_PATH)[1]  # Get the dataframe part
+        except Exception as e:
+            st.warning(f"Could not load orders data for filters: {e}")
+            filter_source_df = pd.DataFrame()
     else:
         filter_source_df = pd.DataFrame()
 
