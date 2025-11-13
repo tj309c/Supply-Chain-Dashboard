@@ -18,7 +18,7 @@ from data_loader import (
     load_inventory_data,
     load_inventory_analysis_data
 )
-from utils import get_filtered_data_as_excel
+from utils import get_filtered_data_as_excel, get_filtered_data_as_excel_with_metadata
 
 # ===== CONSTANTS & CONFIGURATION =====
 # (Org #1: Extract Constants - Magic numbers centralized for easy tuning)
@@ -1229,16 +1229,41 @@ with tab_debug:
 st.sidebar.divider()
 st.sidebar.header("Download Filtered Data")
 
+# Add export options
+export_with_metadata = st.sidebar.checkbox("Include Filter Summary Sheet", value=True, help="Adds an 'Export Info' sheet with filter criteria and timestamp")
+
 # --- FIX: Add the download button logic that was missing ---
 if 'dfs_to_export' in locals() and dfs_to_export:
     try:
-        excel_data = get_filtered_data_as_excel(dfs_to_export)
+        # Build metadata if requested
+        metadata = None
+        if export_with_metadata and 'active_filters' in locals():
+            metadata = {
+                'Report': report_view,
+                'Export Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'Total Records': sum(len(df) for df, _ in dfs_to_export.values() if isinstance(df, pd.DataFrame)),
+                'Active Filters': str(active_filters) if active_filters else 'None',
+            }
+        
+        # Generate Excel with enhanced formatting
+        excel_data = get_filtered_data_as_excel_with_metadata(
+            dfs_to_export,
+            metadata_dict=metadata,
+            formatting_config={'enable_formatting': True}
+        )
         st.sidebar.download_button(
             label="📥 Download as Excel",
             data=excel_data,
-            file_name=f"Filtered_Supply_Chain_Data_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=f"Filtered_Supply_Chain_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheet.sheet"
         )
+        
+        # Show export summary
+        with st.sidebar.expander("ℹ️ Export Info"):
+            st.caption(f"**Report:** {report_view}")
+            st.caption(f"**Records:** {sum(len(df) for df, _ in dfs_to_export.values() if isinstance(df, pd.DataFrame))} rows across {len(dfs_to_export)} sheets")
+            st.caption(f"**Includes:** Filter summary, formatted numbers, and optimized layout")
+            
     except Exception as e:
         st.sidebar.error("Failed to generate Excel file.")
         print(f"Excel generation error: {e}") # For terminal debugging
