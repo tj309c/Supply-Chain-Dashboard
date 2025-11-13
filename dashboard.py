@@ -20,6 +20,40 @@ from data_loader import (
 )
 from utils import get_filtered_data_as_excel
 
+# ===== CONSTANTS & CONFIGURATION =====
+# (Org #1: Extract Constants - Magic numbers centralized for easy tuning)
+
+# UI/Layout Constants
+CHART_HEIGHT_SMALL = 400
+CHART_HEIGHT_LARGE = 500
+CHART_MARGIN = dict(l=20, r=20, t=40, b=20)
+MAX_DISPLAY_RECORDS = 10
+COLUMNS_DEFAULT = 3
+
+# Data & Caching Constants
+CACHE_TIMEOUT_SECONDS = 3600  # 1 hour (moved here for consistency)
+SECONDARY_Y_AXIS_COLOR = 'red'
+
+# Format Constants (Org #2: DRY - Format Strings)
+FORMATS = {
+    'currency': '{:,.0f}',           # e.g., 1,234,567
+    'percentage': '{:.1f}%',         # e.g., 99.5%
+    'decimal_1': '{:.1f}',           # e.g., 12.5
+    'integer': '{:,}',               # e.g., 1,234
+}
+
+# Debug Tab Column Requirements (Org #4: Debug Tab - Column Definitions)
+DEBUG_COLUMNS = {
+    'service_data': ["units_issued", "on_time", "days_to_deliver", "customer_name", "ship_month"],
+    'service_customer_data': ["total_units", "on_time_pct", "avg_days"],
+    'service_monthly_data': ["ship_month", "total_units", "on_time_pct", "avg_days"],
+    'backorder_data': ["backorder_qty", "days_on_backorder", "customer_name", "product_name"],
+    'backorder_customer_data': ["total_bo_qty", "avg_days_on_bo"],
+    'backorder_item_data': ["product_name", "total_bo_qty", "avg_days_on_bo"],
+    'inventory_data': ["on_hand_qty", "daily_demand", "category"],
+    'inventory_category_data': ["total_on_hand", "avg_dio"],
+}
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Supply Chain Dashboard",
@@ -34,9 +68,6 @@ ORDERS_FILE_PATH = os.environ.get("ORDERS_FILE_PATH", "ORDERS.csv")
 DELIVERIES_FILE_PATH = os.environ.get("DELIVERIES_FILE_PATH", "DELIVERIES.csv")
 MASTER_DATA_FILE_PATH = os.environ.get("MASTER_DATA_FILE_PATH", "Master Data.csv")
 INVENTORY_FILE_PATH = os.environ.get("INVENTORY_FILE_PATH", "INVENTORY.csv")
-
-# --- NEW: Auto-refresh configuration ---
-CACHE_TIMEOUT_SECONDS = 3600 # 1 hour (3600 seconds)
 
 # === FILE CHECKER & UPLOADER ===
 # Check that all files exist; if missing, offer upload fallback
@@ -439,6 +470,46 @@ def get_unique_values(df, column):
         return sorted(list(df[df[column] != 'Unknown'][column].astype(str).unique()))
     return []
 
+# --- Org #2: Helper function for consistent DataFrame formatting ---
+def format_dataframe_number(value, format_type='currency'):
+    """Apply consistent number formatting to dataframe values."""
+    fmt = FORMATS.get(format_type, FORMATS['decimal_1'])
+    return fmt
+
+def create_dataframe_format_dict(columns, format_types):
+    """
+    Create a format dictionary for dataframe styling.
+    
+    Args:
+        columns: List of column names to format
+        format_types: Dict mapping column names to format type keys (from FORMATS)
+    
+    Returns:
+        Dict ready for df.style.format()
+    """
+    return {col: FORMATS.get(format_types.get(col, 'decimal_1')) 
+            for col in columns if col in format_types}
+
+# --- Org #3: Helper function for multiselect filter widgets ---
+def create_multiselect_filter(label, df, column, key_suffix):
+    """
+    Create a multiselect filter widget with consistent styling.
+    
+    Args:
+        label: Display label for the filter
+        df: Source dataframe
+        column: Column name to get unique values from
+        key_suffix: Unique key suffix for widget identification
+    
+    Returns:
+        List of selected values (empty list if none selected)
+    """
+    return st.sidebar.multiselect(
+        label,
+        get_unique_values(df, column),
+        key=key_suffix
+    )
+
 # --- NEW: Conditional Filters based on Report View ---
 st.sidebar.header("Filters")
 
@@ -494,11 +565,12 @@ else:
         sorted_months = sorted(list(all_months), key=lambda m: pd.to_datetime(m, format='%B').month)
     f_month = st.sidebar.selectbox("Select Order Month:", ["All"] + list(sorted_months), key="month")
 
-    f_customer = st.sidebar.multiselect("Select Customer(s):", get_unique_values(filter_source_df, 'customer_name'), key="customer")
-    f_material = st.sidebar.multiselect("Select Material(s):", get_unique_values(filter_source_df, 'product_name'), key="material")
-    f_category = st.sidebar.multiselect("Select Category:", get_unique_values(filter_source_df, 'category'), key="category")
-    f_sales_org = st.sidebar.multiselect("Select Sales Org(s):", get_unique_values(filter_source_df, 'sales_org'), key="sales_org")
-    f_order_type = st.sidebar.multiselect("Select Order Type(s):", get_unique_values(filter_source_df, 'order_type'), key="order_type")
+    # --- Org #3: Use helper function for consistent multiselect widgets ---
+    f_customer = create_multiselect_filter("Select Customer(s):", filter_source_df, 'customer_name', "customer")
+    f_material = create_multiselect_filter("Select Material(s):", filter_source_df, 'product_name', "material")
+    f_category = create_multiselect_filter("Select Category:", filter_source_df, 'category', "category")
+    f_sales_org = create_multiselect_filter("Select Sales Org(s):", filter_source_df, 'sales_org', "sales_org")
+    f_order_type = create_multiselect_filter("Select Order Type(s):", filter_source_df, 'order_type', "order_type")
 
     # --- FIX: Order Reason is an outbound metric (ORDERS.csv/DELIVERIES.csv only) ---
     # Should NEVER be considered for Inventory reports. Only show for Backorder reports.
@@ -595,8 +667,8 @@ if report_view == "Service Level":
                     else:
                         fig = make_subplots(specs=[[{"secondary_y": True}]])
                         fig.add_trace(go.Bar(x=cust_svc.index, y=cust_svc['total_units'], name="Units Issued"), secondary_y=False)
-                        fig.add_trace(go.Scatter(x=cust_svc.index, y=cust_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+                        fig.add_trace(go.Scatter(x=cust_svc.index, y=cust_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
                         fig.update_yaxes(title_text="Units Issued", secondary_y=False)
                         fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
                         st.plotly_chart(fig, use_container_width=True)
@@ -605,7 +677,9 @@ if report_view == "Service Level":
                 
                 if not cust_svc.empty:
                     st.dataframe(cust_svc.style.format({
-                        'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
+                        'total_units': FORMATS['currency'], 
+                        'on_time_pct': FORMATS['percentage'], 
+                        'avg_days': FORMATS['decimal_1']
                     }), use_container_width=True)
 
             with col2:
@@ -618,8 +692,8 @@ if report_view == "Service Level":
                     else:
                         fig = make_subplots(specs=[[{"secondary_y": True}]])
                         fig.add_trace(go.Bar(x=month_svc['ship_month'], y=month_svc['total_units'], name="Units Issued"), secondary_y=False)
-                        fig.add_trace(go.Scatter(x=month_svc['ship_month'], y=month_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+                        fig.add_trace(go.Scatter(x=month_svc['ship_month'], y=month_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
                         fig.update_yaxes(title_text="Units Issued", secondary_y=False)
                         fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
                         st.plotly_chart(fig, use_container_width=True)
@@ -628,7 +702,9 @@ if report_view == "Service Level":
                 
                 if not month_svc.empty:
                     st.dataframe(month_svc[['ship_month', 'total_units', 'on_time_pct', 'avg_days']].style.format({
-                        'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
+                        'total_units': FORMATS['currency'], 
+                        'on_time_pct': FORMATS['percentage'], 
+                        'avg_days': FORMATS['decimal_1']
                     }), use_container_width=True, hide_index=True)
 
 elif report_view == "Backorder Report":
@@ -688,8 +764,8 @@ elif report_view == "Backorder Report":
                     else:
                         fig = make_subplots(specs=[[{"secondary_y": True}]])
                         fig.add_trace(go.Bar(x=cust_bo.index, y=cust_bo['total_bo_qty'], name="Backorder Qty"), secondary_y=False)
-                        fig.add_trace(go.Scatter(x=cust_bo.index, y=cust_bo['avg_days_on_bo'], name="Avg. Days on BO", mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+                        fig.add_trace(go.Scatter(x=cust_bo.index, y=cust_bo['avg_days_on_bo'], name="Avg. Days on BO", mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
+                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
                         fig.update_yaxes(title_text="Backorder Qty", secondary_y=False)
                         fig.update_yaxes(title_text="Avg. Days on BO", secondary_y=True)
                         st.plotly_chart(fig, use_container_width=True)
@@ -697,7 +773,10 @@ elif report_view == "Backorder Report":
                     st.error(f"Error generating customer chart: {e}")
                 
                 if not cust_bo.empty:
-                    st.dataframe(cust_bo.style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
+                    st.dataframe(cust_bo.style.format({
+                        'total_bo_qty': FORMATS['currency'], 
+                        'avg_days_on_bo': FORMATS['decimal_1']
+                    }), use_container_width=True)
 
             with col2: # --- NEW: Add a chart for the item data ---
                 st.subheader("Backorder Qty by Item (Top 10)")
@@ -708,13 +787,16 @@ elif report_view == "Backorder Report":
                         st.warning("No item data available for charting.")
                     else:
                         fig = go.Figure(go.Bar(x=item_bo_chart['product_name'], y=item_bo_chart['total_bo_qty']))
-                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="Backorder Qty")
+                        fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN, yaxis_title="Backorder Qty")
                         st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generating item chart: {e}")
 
                 if not item_bo_chart.empty:
-                    st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
+                    st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({
+                        'total_bo_qty': FORMATS['currency'], 
+                        'avg_days_on_bo': FORMATS['decimal_1']
+                    }), use_container_width=True)
 
 elif report_view == "Inventory Management":
     # --- Apply filters for THIS view ---
@@ -756,9 +838,9 @@ elif report_view == "Inventory Management":
                 else:
                     fig = make_subplots(specs=[[{"secondary_y": True}]])
                     fig.add_trace(go.Bar(x=inv_by_cat.index, y=inv_by_cat['total_on_hand'], name="On-Hand Stock"), secondary_y=False)
-                    fig.add_trace(go.Scatter(x=inv_by_cat.index, y=inv_by_cat['avg_dio'], name="Avg. DIO", mode='lines+markers', line=dict(color='red')), secondary_y=True)
+                    fig.add_trace(go.Scatter(x=inv_by_cat.index, y=inv_by_cat['avg_dio'], name="Avg. DIO", mode='lines+markers', line=dict(color=SECONDARY_Y_AXIS_COLOR)), secondary_y=True)
                     
-                    fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
+                    fig.update_layout(height=CHART_HEIGHT_LARGE, margin=CHART_MARGIN)
                     fig.update_yaxes(title_text="On-Hand Stock (Units)", secondary_y=False)
                     fig.update_yaxes(title_text="Avg. Days of Inventory (DIO)", secondary_y=True)
                     st.plotly_chart(fig, use_container_width=True)
@@ -767,8 +849,8 @@ elif report_view == "Inventory Management":
             
             if not inv_by_cat.empty:
                 st.dataframe(inv_by_cat.style.format({
-                    'total_on_hand': '{:,.0f}', 
-                    'avg_dio': '{:.1f}'
+                    'total_on_hand': FORMATS['currency'], 
+                    'avg_dio': FORMATS['decimal_1']
                 }), use_container_width=True)
 
 
@@ -809,50 +891,50 @@ with tab_debug:
             issues.append(f"✅ {name} dataframe OK for graphing.")
         return issues
 
-    # --- NEW: Cache debug aggregations (Perf #1) to avoid recalculating on every debug tab view ---
+    # --- Org #4: Use DEBUG_COLUMNS constants for maintainability ---
     # Service Level Graphs
     st.subheader("Service Level Graphs")
-    for issue in check_graph_df(service_data, "service_data", ["units_issued", "on_time", "days_to_deliver", "customer_name", "ship_month"]):
+    for issue in check_graph_df(service_data, "service_data", DEBUG_COLUMNS['service_data']):
         st.write(issue)
     
     # Cache service customer data
     if 'service_customer_debug' not in st.session_state['cached_debug_aggregations']:
         st.session_state['cached_debug_aggregations']['service_customer_debug'] = get_service_customer_data(service_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_customer_debug'], "service_customer_data", ["total_units", "on_time_pct", "avg_days"]):
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_customer_debug'], "service_customer_data", DEBUG_COLUMNS['service_customer_data']):
         st.write(issue)
     
     # Cache service monthly data
     if 'service_monthly_debug' not in st.session_state['cached_debug_aggregations']:
         st.session_state['cached_debug_aggregations']['service_monthly_debug'] = get_service_monthly_data(service_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_monthly_debug'], "service_monthly_data", ["ship_month", "total_units", "on_time_pct", "avg_days"]):
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['service_monthly_debug'], "service_monthly_data", DEBUG_COLUMNS['service_monthly_data']):
         st.write(issue)
 
     # Backorder Graphs
     st.subheader("Backorder Graphs")
-    for issue in check_graph_df(backorder_data, "backorder_data", ["backorder_qty", "days_on_backorder", "customer_name", "product_name"]):
+    for issue in check_graph_df(backorder_data, "backorder_data", DEBUG_COLUMNS['backorder_data']):
         st.write(issue)
     
     # Cache backorder customer data
     if 'backorder_customer_debug' not in st.session_state['cached_debug_aggregations']:
         st.session_state['cached_debug_aggregations']['backorder_customer_debug'] = get_backorder_customer_data(backorder_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_customer_debug'], "backorder_customer_data", ["total_bo_qty", "avg_days_on_bo"]):
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_customer_debug'], "backorder_customer_data", DEBUG_COLUMNS['backorder_customer_data']):
         st.write(issue)
     
     # Cache backorder item data
     if 'backorder_item_debug' not in st.session_state['cached_debug_aggregations']:
         st.session_state['cached_debug_aggregations']['backorder_item_debug'] = get_backorder_item_data(backorder_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_item_debug'], "backorder_item_data", ["product_name", "total_bo_qty", "avg_days_on_bo"]):
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['backorder_item_debug'], "backorder_item_data", DEBUG_COLUMNS['backorder_item_data']):
         st.write(issue)
 
     # Inventory Graphs
     st.subheader("Inventory Graphs")
-    for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", ["on_hand_qty", "daily_demand", "category"]):
+    for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", DEBUG_COLUMNS['inventory_data']):
         st.write(issue)
     
     # Cache inventory category data
     if 'inventory_category_debug' not in st.session_state['cached_debug_aggregations']:
         st.session_state['cached_debug_aggregations']['inventory_category_debug'] = get_inventory_category_data(inventory_analysis_data)
-    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['inventory_category_debug'], "inventory_category_data", ["total_on_hand", "avg_dio"]):
+    for issue in check_graph_df(st.session_state['cached_debug_aggregations']['inventory_category_debug'], "inventory_category_data", DEBUG_COLUMNS['inventory_category_data']):
         st.write(issue)
 
     st.divider()
