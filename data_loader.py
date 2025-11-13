@@ -3,6 +3,7 @@ from datetime import datetime
 import numpy as np
 import warnings
 import time # <-- Import time for performance tracking
+from file_loader import safe_read_csv
 
 # === Helper Functions ===
 
@@ -19,9 +20,14 @@ def check_columns(df, required_cols, filename, logs):
 
 # === Main Data Loaders ===
 
-def load_master_data(master_data_path):
+def load_master_data(master_data_path, file_key='master'):
     """
     Loads the Item Master data (Master Data.csv) to be used as a lookup table.
+    
+    Args:
+        master_data_path: file path (used if no uploaded file exists)
+        file_key: session state key for uploaded file (default 'master')
+    
     Returns: logs (list), dataframe, error_dataframe
     """
     logs = []
@@ -32,7 +38,7 @@ def load_master_data(master_data_path):
     try:
         # --- OPTIMIZATION: Only load the columns we need ---
         cols_to_load = ["Material Number", "PLM: Level Classification 4"]
-        df = pd.read_csv(master_data_path, low_memory=False, usecols=cols_to_load)
+        df = safe_read_csv(file_key, master_data_path, usecols=cols_to_load, low_memory=False)
         logs.append(f"INFO: Found and loaded {len(df)} rows from Master Data.")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'Master Data.csv': {e}")
@@ -73,10 +79,15 @@ def load_master_data(master_data_path):
 
 # --- UPDATED: This function is now split into two. ---
 # This one is for ITEM-LEVEL details (Fill Rate, Backorder, Cancel)
-def load_orders_item_lookup(orders_path):
+def load_orders_item_lookup(orders_path, file_key='orders'):
     """
     Loads the ORDERS.csv file and creates a clean, aggregated lookup table
     at the ORDER + ITEM (SKU) level.
+    
+    Args:
+        orders_path: file path (used if no uploaded file exists)
+        file_key: session state key for uploaded file (default 'orders')
+    
     Returns: logs (list), dataframe, error_dataframe
     """
     logs = []
@@ -103,7 +114,7 @@ def load_orders_item_lookup(orders_path):
     
     try:
         # --- OPTIMIZATION: Only load the columns we need ---
-        df = pd.read_csv(orders_path, low_memory=False, usecols=list(order_cols.keys()))
+        df = safe_read_csv(file_key, orders_path, usecols=list(order_cols.keys()), low_memory=False)
         logs.append(f"INFO: Found and loaded {len(df)} rows from ORDERS.csv for item lookup.")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'ORDERS.csv' for lookup. Check columns. Error: {e}")
@@ -184,10 +195,15 @@ def load_orders_item_lookup(orders_path):
 
 
 # --- NEW FUNCTION: This is for HEADER-LEVEL details (Service Level) ---
-def load_orders_header_lookup(orders_path):
+def load_orders_header_lookup(orders_path, file_key='orders'):
     """
     Loads the ORDERS.csv file and creates a clean, aggregated lookup table
     at the ORDER HEADER level (Order Number only).
+    
+    Args:
+        orders_path: file path (used if no uploaded file exists)
+        file_key: session state key for uploaded file (default 'orders')
+    
     Returns: logs (list), dataframe
     """
     logs = []
@@ -196,14 +212,14 @@ def load_orders_header_lookup(orders_path):
     
     try:
         # --- FIX: Use 'usecols' for memory efficiency ---
-        df = pd.read_csv(orders_path, low_memory=False, usecols=[
+        df = safe_read_csv(file_key, orders_path, usecols=[
             "Orders Detail - Order Document Number",
             "Order Creation Date: Date",
             "Original Customer Name",
             "Order Type (SAP) Code",
             "Order Reason Code",
             "Sales Organization Code" # <-- ADDED
-        ])
+        ], low_memory=False)
         logs.append(f"INFO: Found {len(df)} rows in ORDERS for header.")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'ORDERS.csv' for header lookup: {e}")
@@ -251,10 +267,17 @@ def load_orders_header_lookup(orders_path):
     return logs, df_agg
 
 
-def load_service_data(deliveries_path, orders_header_lookup_df, master_data_df):
+def load_service_data(deliveries_path, orders_header_lookup_df, master_data_df, file_key='deliveries'):
     """
     Loads SHIPPED data from DELIVERIES and joins the order/master data.
     --- UPDATED: Joins on ORDER NUMBER only ---
+    
+    Args:
+        deliveries_path: file path (used if no uploaded file exists)
+        orders_header_lookup_df: orders header lookup dataframe
+        master_data_df: master data dataframe
+        file_key: session state key for uploaded file (default 'deliveries')
+    
     Returns: logs (list), dataframe, error_dataframe
     """
     logs = []
@@ -277,11 +300,7 @@ def load_service_data(deliveries_path, orders_header_lookup_df, master_data_df):
 
     try:
         # --- OPTIMIZATION: Only load the columns we need ---
-        deliveries_df = pd.read_csv(
-            deliveries_path, 
-            low_memory=False, 
-            usecols=list(delivery_cols.keys())
-        )
+        deliveries_df = safe_read_csv(file_key, deliveries_path, usecols=list(delivery_cols.keys()), low_memory=False)
         logs.append(f"INFO: Found and loaded {len(deliveries_df)} rows from DELIVERIES.csv for service data.")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'DELIVERIES.csv' for service data. Check columns. Error: {e}")
@@ -389,6 +408,9 @@ def load_backorder_data(orders_item_lookup_df, orders_header_lookup_df, master_d
     """
     Filters the main orders lookup table for unfulfilled backorders.
     --- UPDATED: Joins with order_header_lookup to get authoritative header-level data ---
+    
+    Note: This function does not take a file_key because it works with already-loaded dataframes
+    from load_orders_item_lookup, load_orders_header_lookup, and load_master_data.
     """
     logs = []
     start_time = time.time()
@@ -468,10 +490,15 @@ def load_backorder_data(orders_item_lookup_df, orders_header_lookup_df, master_d
     return logs, df, error_df
 
 # --- NEW: Inventory Data Loader ---
-def load_inventory_data(inventory_path):
+def load_inventory_data(inventory_path, file_key='inventory'):
     """
     Loads the inventory snapshot data from INVENTORY.csv, which contains
     on-hand stock quantities. It aggregates stock by SKU.
+    
+    Args:
+        inventory_path: file path (used if no uploaded file exists)
+        file_key: session state key for uploaded file (default 'inventory')
+    
     Returns: logs (list), dataframe, error_dataframe
     """
     logs = []
@@ -486,7 +513,7 @@ def load_inventory_data(inventory_path):
     
     try:
         # Load only the necessary columns for efficiency
-        df = pd.read_csv(inventory_path, low_memory=False, usecols=list(inventory_cols.keys()))
+        df = safe_read_csv(file_key, inventory_path, usecols=list(inventory_cols.keys()), low_memory=False)
         logs.append(f"INFO: Found and loaded {len(df)} rows from INVENTORY.csv.")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'INVENTORY.csv'. Check columns. Error: {e}")
@@ -514,9 +541,15 @@ def load_inventory_data(inventory_path):
     
     return logs, df, pd.DataFrame()
 
-def load_inventory_analysis_data(inventory_df, deliveries_path, master_data_df):
+def load_inventory_analysis_data(inventory_df, deliveries_path, master_data_df, file_key='deliveries'):
     """
     Calculates daily demand and DIO, then enriches with master data.
+    
+    Args:
+        inventory_df: inventory dataframe (already loaded)
+        deliveries_path: file path (used if no uploaded file exists)
+        master_data_df: master data dataframe
+        file_key: session state key for uploaded file (default 'deliveries')
     """
     logs = []
     start_time = time.time()
@@ -528,11 +561,7 @@ def load_inventory_analysis_data(inventory_df, deliveries_path, master_data_df):
 
     # 1. Load last 12 months of deliveries to calculate demand
     try:
-        deliveries_df = pd.read_csv(
-            deliveries_path, 
-            low_memory=False, 
-            usecols=["Item - SAP Model Code", "Delivery Creation Date: Date", "Deliveries - TOTAL Goods Issue Qty"]
-        )
+        deliveries_df = safe_read_csv(file_key, deliveries_path, usecols=["Item - SAP Model Code", "Delivery Creation Date: Date", "Deliveries - TOTAL Goods Issue Qty"], low_memory=False)
         deliveries_df = deliveries_df.rename(columns={
             "Item - SAP Model Code": "sku",
             "Delivery Creation Date: Date": "ship_date",

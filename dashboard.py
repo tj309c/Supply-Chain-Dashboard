@@ -28,38 +28,97 @@ st.set_page_config(
 )
 
 # --- File Paths ---
-# Use relative paths, assuming all files are in the same folder as the script
-ORDERS_FILE_PATH = "ORDERS.csv"
-DELIVERIES_FILE_PATH = "DELIVERIES.csv"
-MASTER_DATA_FILE_PATH = "Master Data.csv"
-INVENTORY_FILE_PATH = "INVENTORY.csv"
+# Support both environment variables and local/relative paths
+# Set env vars to override defaults: e.g., export ORDERS_FILE_PATH="/path/to/ORDERS.csv"
+ORDERS_FILE_PATH = os.environ.get("ORDERS_FILE_PATH", "ORDERS.csv")
+DELIVERIES_FILE_PATH = os.environ.get("DELIVERIES_FILE_PATH", "DELIVERIES.csv")
+MASTER_DATA_FILE_PATH = os.environ.get("MASTER_DATA_FILE_PATH", "Master Data.csv")
+INVENTORY_FILE_PATH = os.environ.get("INVENTORY_FILE_PATH", "INVENTORY.csv")
 
 # --- NEW: Auto-refresh configuration ---
 CACHE_TIMEOUT_SECONDS = 3600 # 1 hour (3600 seconds)
 
-# === FILE CHECKER ===
-# Check that all files exist before proceeding
-with st.sidebar.expander("File Status", expanded=False): 
-    file_paths = {
-        "Orders": ORDERS_FILE_PATH,
-        "Deliveries": DELIVERIES_FILE_PATH,
-        "Master Data": MASTER_DATA_FILE_PATH,
-        "Inventory": INVENTORY_FILE_PATH
-    }
+# === FILE CHECKER & UPLOADER ===
+# Check that all files exist; if missing, offer upload fallback
+file_paths = {
+    "Orders": ORDERS_FILE_PATH,
+    "Deliveries": DELIVERIES_FILE_PATH,
+    "Master Data": MASTER_DATA_FILE_PATH,
+    "Inventory": INVENTORY_FILE_PATH
+}
+
+with st.sidebar.expander("File Status & Upload", expanded=True): 
     all_files_found = True
+    missing_files = {}
 
     for file_label, file_path in file_paths.items():
         abs_path = os.path.abspath(file_path)
         if os.path.isfile(abs_path):
-            st.success(f"Found {file_label} file.") 
+            st.success(f"✓ Found {file_label} file") 
         else:
-            st.error(f"NOT FOUND: {file_label} file.") 
-            st.error(f"Error: Could not find file {file_path} at {abs_path}")
+            st.warning(f"✗ NOT FOUND: {file_label} file") 
+            st.caption(f"Expected at: {abs_path}")
             all_files_found = False
+            missing_files[file_label] = file_path
+
+# Initialize session state for uploaded files
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = {}
 
 if not all_files_found:
-    st.error("One or more data files are missing. Please check the 'File Status' sidebar and file locations.")
-    st.stop()
+    st.warning("**One or more data files are missing.**")
+    st.info("**Option 1: Upload files below** (temporary, for this session)")
+    st.info("**Option 2: Set environment variables** before running Streamlit:")
+    st.code("""
+export ORDERS_FILE_PATH="/path/to/ORDERS.csv"
+export DELIVERIES_FILE_PATH="/path/to/DELIVERIES.csv"
+export MASTER_DATA_FILE_PATH="/path/to/Master Data.csv"
+export INVENTORY_FILE_PATH="/path/to/INVENTORY.csv"
+    """, language="bash")
+    
+    st.divider()
+    st.subheader("Upload Files")
+    
+    # Add custom CSS/JS to disable client-side file size validation
+    st.markdown("""
+    <style>
+    /* Override Streamlit's default file upload size limits */
+    input[type="file"] {
+        max-upload-size: 1073741824 !important;  /* 1 GB */
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # File upload widgets with custom label to indicate size
+    st.markdown("**Max file size: 1 GB**")
+    
+    # File upload widgets
+    uploaded_orders = st.file_uploader("Upload ORDERS.csv", type="csv", key="orders_upload", help="Max 1 GB")
+    uploaded_deliveries = st.file_uploader("Upload DELIVERIES.csv", type="csv", key="deliveries_upload", help="Max 1 GB")
+    uploaded_master = st.file_uploader("Upload Master Data.csv", type="csv", key="master_upload", help="Max 1 GB")
+    uploaded_inventory = st.file_uploader("Upload INVENTORY.csv", type="csv", key="inventory_upload", help="Max 1 GB")
+    
+    # Store uploaded files in session state
+    if uploaded_orders:
+        st.session_state.uploaded_files['orders'] = uploaded_orders
+    if uploaded_deliveries:
+        st.session_state.uploaded_files['deliveries'] = uploaded_deliveries
+    if uploaded_master:
+        st.session_state.uploaded_files['master'] = uploaded_master
+    if uploaded_inventory:
+        st.session_state.uploaded_files['inventory'] = uploaded_inventory
+    
+    # Check if all required files are now available (either on disk or uploaded)
+    files_available = (
+        (os.path.isfile(os.path.abspath(ORDERS_FILE_PATH)) or 'orders' in st.session_state.uploaded_files) and
+        (os.path.isfile(os.path.abspath(DELIVERIES_FILE_PATH)) or 'deliveries' in st.session_state.uploaded_files) and
+        (os.path.isfile(os.path.abspath(MASTER_DATA_FILE_PATH)) or 'master' in st.session_state.uploaded_files) and
+        (os.path.isfile(os.path.abspath(INVENTORY_FILE_PATH)) or 'inventory' in st.session_state.uploaded_files)
+    )
+    
+    if not files_available:
+        st.error("All data files are required. Please upload missing files or set environment variables.")
+        st.stop()
 
 # === Data Loading with Caching ===
 # By decorating these functions with st.cache_data, Streamlit will only run them
@@ -68,19 +127,19 @@ if not all_files_found:
 
 @st.cache_data
 def get_master_data(path):
-    return load_master_data(path)
+    return load_master_data(path, file_key='master')
 
 @st.cache_data
 def get_orders_item_lookup(path):
-    return load_orders_item_lookup(path)
+    return load_orders_item_lookup(path, file_key='orders')
 
 @st.cache_data
 def get_orders_header_lookup(path):
-    return load_orders_header_lookup(path)
+    return load_orders_header_lookup(path, file_key='orders')
 
 @st.cache_data
 def get_service_data(deliveries_path, _orders_header_lookup, _master_data):
-    return load_service_data(deliveries_path, _orders_header_lookup, _master_data)
+    return load_service_data(deliveries_path, _orders_header_lookup, _master_data, file_key='deliveries')
 
 @st.cache_data
 def get_backorder_data(_orders_item_lookup, _orders_header_lookup, _master_data):
@@ -88,11 +147,11 @@ def get_backorder_data(_orders_item_lookup, _orders_header_lookup, _master_data)
 
 @st.cache_data
 def get_inventory_data(path):
-    return load_inventory_data(path)
+    return load_inventory_data(path, file_key='inventory')
 
 @st.cache_data
 def get_inventory_analysis_data(_inventory_data, deliveries_path, _master_data):
-    return load_inventory_analysis_data(_inventory_data, deliveries_path, _master_data)
+    return load_inventory_analysis_data(_inventory_data, deliveries_path, _master_data, file_key='deliveries')
     
 # === NEW: State-based Data Loading ===
 def load_all_data():
@@ -453,61 +512,68 @@ if report_view == "Service Level":
             dfs_to_export["Service_Raw_Filtered"] = (f_service, False)
 
             # --- Main Page Content ---
-        kpi_choice = st.radio(
-            "Select Service KPI:",
-            options=["On-Time %", "Avg. Days to Deliver"],
-            horizontal=True,
-            key='service_kpi_radio'
-        )
-        total_units, on_time_pct, avg_days = get_service_kpis(f_service)
-        kpi1, kpi2, kpi3 = st.columns(3)
-        kpi1.metric("Total Units Issued", f"{total_units:,.0f}")
-        kpi2.metric("On-Time (OT) %", f"{on_time_pct:.1f}%")
-        kpi3.metric("Avg. Days to Deliver", f"{avg_days:.1f} days")
-        
-        st.divider()
-        
-        if kpi_choice == "On-Time %":
-            kpi_col, kpi_name, y_range = 'on_time_pct', 'On-Time %', [0, 100]
-        else:
-            kpi_col, kpi_name, y_range = 'avg_days', 'Avg. Days', None
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader(f"Units & {kpi_name} by Customer (Top 10)")
-            placeholder = st.empty()
-            with placeholder, st.spinner("Generating customer chart..."):
-                cust_svc = get_service_customer_data(f_service)
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
-                fig.add_trace(go.Bar(x=cust_svc.index, y=cust_svc['total_units'], name="Units Issued"), secondary_y=False)
-                fig.add_trace(go.Scatter(x=cust_svc.index, y=cust_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
-                fig.update_yaxes(title_text="Units Issued", secondary_y=False)
-                fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
-                placeholder.plotly_chart(fig, use_container_width=True)
+            kpi_choice = st.radio(
+                "Select Service KPI:",
+                options=["On-Time %", "Avg. Days to Deliver"],
+                horizontal=True,
+                key='service_kpi_radio'
+            )
+            total_units, on_time_pct, avg_days = get_service_kpis(f_service)
+            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1.metric("Total Units Issued", f"{total_units:,.0f}")
+            kpi2.metric("On-Time (OT) %", f"{on_time_pct:.1f}%")
+            kpi3.metric("Avg. Days to Deliver", f"{avg_days:.1f} days")
             
-            st.dataframe(cust_svc.style.format({
-                'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
-            }), use_container_width=True)
+            st.divider()
+            
+            if kpi_choice == "On-Time %":
+                kpi_col, kpi_name, y_range = 'on_time_pct', 'On-Time %', [0, 100]
+            else:
+                kpi_col, kpi_name, y_range = 'avg_days', 'Avg. Days', None
 
-        with col2:
-            st.subheader(f"Monthly Units & {kpi_name}")
-            placeholder = st.empty()
-            with placeholder, st.spinner("Generating monthly chart..."):
-                month_svc = get_service_monthly_data(f_service)
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader(f"Units & {kpi_name} by Customer (Top 10)")
+                try:
+                    cust_svc = get_service_customer_data(f_service)
+                    if cust_svc.empty:
+                        st.warning("No customer data available for charting.")
+                    else:
+                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+                        fig.add_trace(go.Bar(x=cust_svc.index, y=cust_svc['total_units'], name="Units Issued"), secondary_y=False)
+                        fig.add_trace(go.Scatter(x=cust_svc.index, y=cust_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color='red')), secondary_y=True)
+                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+                        fig.update_yaxes(title_text="Units Issued", secondary_y=False)
+                        fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
+                        st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generating customer chart: {e}")
+                
+                st.dataframe(cust_svc.style.format({
+                    'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
+                }), use_container_width=True)
+
+            with col2:
+                st.subheader(f"Monthly Units & {kpi_name}")
+                try:
+                    month_svc = get_service_monthly_data(f_service)
+                    if month_svc.empty:
+                        st.warning("No monthly data available for charting.")
+                    else:
+                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+                        fig.add_trace(go.Bar(x=month_svc['ship_month'], y=month_svc['total_units'], name="Units Issued"), secondary_y=False)
+                        fig.add_trace(go.Scatter(x=month_svc['ship_month'], y=month_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color='red')), secondary_y=True)
+                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+                        fig.update_yaxes(title_text="Units Issued", secondary_y=False)
+                        fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
+                        st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generating monthly chart: {e}")
+                
                 # --- UPDATED: Use ship_month ---
-                fig.add_trace(go.Bar(x=month_svc['ship_month'], y=month_svc['total_units'], name="Units Issued"), secondary_y=False)
-                fig.add_trace(go.Scatter(x=month_svc['ship_month'], y=month_svc[kpi_col], name=kpi_name, mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
-                fig.update_yaxes(title_text="Units Issued", secondary_y=False)
-                fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
-                placeholder.plotly_chart(fig, use_container_width=True)
-            
-            # --- UPDATED: Use ship_month ---
-            st.dataframe(month_svc[['ship_month', 'total_units', 'on_time_pct', 'avg_days']].style.format({
-                'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
-            }), use_container_width=True, hide_index=True)
+                st.dataframe(month_svc[['ship_month', 'total_units', 'on_time_pct', 'avg_days']].style.format({
+                    'total_units': '{:,.0f}', 'on_time_pct': '{:.1f}%', 'avg_days': '{:.1f}'
+                }), use_container_width=True, hide_index=True)
 
 elif report_view == "Backorder Report":
     # --- Apply filters for THIS view ---
@@ -553,27 +619,35 @@ elif report_view == "Backorder Report":
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Backorder Qty by Customer (Top 10)")
-                placeholder = st.empty()
-                with placeholder, st.spinner("Generating customer chart..."):
+                try:
                     cust_bo = get_backorder_customer_data(f_backorder)
-                    fig = make_subplots(specs=[[{"secondary_y": True}]])
-                    fig.add_trace(go.Bar(x=cust_bo.index, y=cust_bo['total_bo_qty'], name="Backorder Qty"), secondary_y=False)
-                    fig.add_trace(go.Scatter(x=cust_bo.index, y=cust_bo['avg_days_on_bo'], name="Avg. Days on BO", mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                    fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
-                    fig.update_yaxes(title_text="Backorder Qty", secondary_y=False)
-                    fig.update_yaxes(title_text="Avg. Days on BO", secondary_y=True)
-                    placeholder.plotly_chart(fig, use_container_width=True)
+                    if cust_bo.empty:
+                        st.warning("No customer data available for charting.")
+                    else:
+                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+                        fig.add_trace(go.Bar(x=cust_bo.index, y=cust_bo['total_bo_qty'], name="Backorder Qty"), secondary_y=False)
+                        fig.add_trace(go.Scatter(x=cust_bo.index, y=cust_bo['avg_days_on_bo'], name="Avg. Days on BO", mode='lines+markers', line=dict(color='red')), secondary_y=True)
+                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+                        fig.update_yaxes(title_text="Backorder Qty", secondary_y=False)
+                        fig.update_yaxes(title_text="Avg. Days on BO", secondary_y=True)
+                        st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generating customer chart: {e}")
                 
                 st.dataframe(cust_bo.style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
 
             with col2: # --- NEW: Add a chart for the item data ---
                 st.subheader("Backorder Qty by Item (Top 10)")
-                placeholder = st.empty()
-                with placeholder, st.spinner("Generating item chart..."):
+                try:
                     item_bo_chart = get_backorder_item_data(f_backorder)
-                    fig = go.Figure(go.Bar(x=item_bo_chart['product_name'], y=item_bo_chart['total_bo_qty']))
-                    fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="Backorder Qty")
-                    placeholder.plotly_chart(fig, use_container_width=True)
+                    if item_bo_chart.empty:
+                        st.warning("No item data available for charting.")
+                    else:
+                        fig = go.Figure(go.Bar(x=item_bo_chart['product_name'], y=item_bo_chart['total_bo_qty']))
+                        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="Backorder Qty")
+                        st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generating item chart: {e}")
 
                 st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({'total_bo_qty': '{:,.0f}', 'avg_days_on_bo': '{:.1f}'}), use_container_width=True)
 
@@ -609,18 +683,21 @@ elif report_view == "Inventory Management":
             st.divider()
             
             st.subheader("On-Hand Stock & DIO by Category")
-            placeholder = st.empty()
-            with placeholder, st.spinner("Generating inventory chart..."):
+            try:
                 inv_by_cat = get_inventory_category_data(f_inventory)
-                
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
-                fig.add_trace(go.Bar(x=inv_by_cat.index, y=inv_by_cat['total_on_hand'], name="On-Hand Stock"), secondary_y=False)
-                fig.add_trace(go.Scatter(x=inv_by_cat.index, y=inv_by_cat['avg_dio'], name="Avg. DIO", mode='lines+markers', line=dict(color='red')), secondary_y=True)
-                
-                fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
-                fig.update_yaxes(title_text="On-Hand Stock (Units)", secondary_y=False)
-                fig.update_yaxes(title_text="Avg. Days of Inventory (DIO)", secondary_y=True)
-                placeholder.plotly_chart(fig, use_container_width=True)
+                if inv_by_cat.empty:
+                    st.warning("No inventory category data available for charting.")
+                else:
+                    fig = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig.add_trace(go.Bar(x=inv_by_cat.index, y=inv_by_cat['total_on_hand'], name="On-Hand Stock"), secondary_y=False)
+                    fig.add_trace(go.Scatter(x=inv_by_cat.index, y=inv_by_cat['avg_dio'], name="Avg. DIO", mode='lines+markers', line=dict(color='red')), secondary_y=True)
+                    
+                    fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
+                    fig.update_yaxes(title_text="On-Hand Stock (Units)", secondary_y=False)
+                    fig.update_yaxes(title_text="Avg. Days of Inventory (DIO)", secondary_y=True)
+                    st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error generating inventory chart: {e}")
             
             st.dataframe(inv_by_cat.style.format({
                 'total_on_hand': '{:,.0f}', 
@@ -635,9 +712,7 @@ with tab_debug:
 
     if error_reports:
         st.error("Actionable data quality issues were found during loading.")
-        
         try:
-            # Use the error reports from session state
             error_excel_data = get_filtered_data_as_excel(error_reports)
             st.download_button(
                 label="Download Data Quality Report (Errors & Mismatches)",
@@ -648,106 +723,61 @@ with tab_debug:
         except Exception as e:
             st.error("An error occurred while generating the Error Report.")
             st.exception(e)
-            
         st.divider()
     else:
         st.success("No data quality errors or mismatches found.")
         st.divider()
 
-    # --- NEW: Powerful Debugger Tool ---
-    st.header("🕵️ Report Debugger")
-    st.info(f"This tool provides detailed information for the currently selected report: **{report_view}**")
+    st.header("🕵️ Line/Bar Graph Debugger")
+    st.info("This section checks for common issues that prevent line/bar graphs from rendering.")
 
-    def get_df_info(df):
-        """Captures the output of df.info() into a string."""
-        buffer = io.StringIO()
-        df.info(buf=buffer)
-        return buffer.getvalue()
+    def check_graph_df(df, name, required_cols):
+        issues = []
+        if df.empty:
+            issues.append(f"❌ {name} dataframe is EMPTY.")
+        for col in required_cols:
+            if col not in df.columns:
+                issues.append(f"❌ Column '{col}' missing in {name}.")
+        if not issues:
+            issues.append(f"✅ {name} dataframe OK for graphing.")
+        return issues
 
-    if report_view == "Backorder Report":
-        with st.expander("Show Backorder Report Debug Details"):
-            st.subheader("Filter State")
-            st.write("These are the exact filter values being applied to the data:")
-            active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-            # --- IMPROVEMENT: Make the JSON output cleaner and more readable ---
-            clean_filters_for_display = {
-                k: (str(v) if not isinstance(v, list) else v)
-                for k, v in active_filters.items()
-            }
-            st.json(clean_filters_for_display)
+    # Service Level Graphs
+    st.subheader("Service Level Graphs")
+    for issue in check_graph_df(service_data, "service_data", ["units_issued", "on_time", "days_to_deliver", "customer_name", "ship_month"]):
+        st.write(issue)
+    for issue in check_graph_df(get_service_customer_data(service_data), "service_customer_data", ["total_units", "on_time_pct", "avg_days"]):
+        st.write(issue)
+    for issue in check_graph_df(get_service_monthly_data(service_data), "service_monthly_data", ["ship_month", "total_units", "on_time_pct", "avg_days"]):
+        st.write(issue)
 
-            st.subheader("Data Analysis: BEFORE Filtering")
-            st.metric(
-                label="Total Rows in `backorder_data`",
-                value=f"{len(backorder_data):,}"
-            )
-            st.text(get_df_info(backorder_data))
-            st.write("Top 5 rows by backorder quantity from `backorder_data`:")
-            st.dataframe(backorder_data.sort_values(by='backorder_qty', ascending=False).head())
+    # Backorder Graphs
+    st.subheader("Backorder Graphs")
+    for issue in check_graph_df(backorder_data, "backorder_data", ["backorder_qty", "days_on_backorder", "customer_name", "product_name"]):
+        st.write(issue)
+    for issue in check_graph_df(get_backorder_customer_data(backorder_data), "backorder_customer_data", ["total_bo_qty", "avg_days_on_bo"]):
+        st.write(issue)
+    for issue in check_graph_df(get_backorder_item_data(backorder_data), "backorder_item_data", ["product_name", "total_bo_qty", "avg_days_on_bo"]):
+        st.write(issue)
 
-            st.subheader("Data Analysis: AFTER Filtering")
-            st.metric(
-                label="Total Rows in `f_backorder` (filtered)",
-                value=f"{len(f_backorder):,}",
-                delta=f"{len(f_backorder) - len(backorder_data):,}" if not backorder_data.empty else "0",
-                delta_color="off"
-            )
-            st.text(get_df_info(f_backorder))
-            st.write("Top 5 rows by backorder quantity from `f_backorder`:")
-            st.dataframe(f_backorder.sort_values(by='backorder_qty', ascending=False).head())
-    
-    elif report_view == "Service Level":
-         with st.expander("Show Service Level Report Debug Details"):
-            st.subheader("Filter State")
-            st.write("These are the exact filter values being applied to the data:")
-            active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-            clean_filters_for_display = {
-                k: (str(v) if not isinstance(v, list) else v)
-                for k, v in active_filters.items()
-            }
-            st.json(clean_filters_for_display)
-            # You can add similar before/after analysis for service_data and f_service here if needed.
-            st.info("Before/After analysis for Service Level can be added here.")
-
-    elif report_view == "Inventory Management":
-        with st.expander("Show Inventory Report Debug Details", expanded=True):
-            st.subheader("Inventory Data Analysis")
-            st.info("This section shows the state of the inventory data before and after any filtering.")
-
-            # --- Before Filtering ---
-            st.markdown("#### `inventory_analysis_data` (Before Filtering)")
-            st.metric("Total Rows", f"{len(inventory_analysis_data):,}")
-            st.metric("Total On-Hand Units", f"{inventory_analysis_data['on_hand_qty'].sum():,.0f}")
-            st.metric("Total Calculated Daily Demand", f"{inventory_analysis_data['daily_demand'].sum():,.2f}")
-            st.text("DataFrame Info:")
-            st.text(get_df_info(inventory_analysis_data))
-            st.write("Top 5 rows by on-hand quantity:")
-            st.dataframe(inventory_analysis_data.sort_values(by='on_hand_qty', ascending=False).head())
-
-            # --- After Filtering ---
-            st.markdown("#### `f_inventory` (After Filtering)")
-            st.metric("Total Rows", f"{len(f_inventory):,}", delta=f"{len(f_inventory) - len(inventory_analysis_data):,}")
-            st.metric("Total On-Hand Units", f"{f_inventory['on_hand_qty'].sum():,.0f}")
-            st.text("DataFrame Info:")
-            st.text(get_df_info(f_inventory))
-            st.write("Top 5 rows by on-hand quantity:")
-            st.dataframe(f_inventory.sort_values(by='on_hand_qty', ascending=False).head())
-
+    # Inventory Graphs
+    st.subheader("Inventory Graphs")
+    for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", ["on_hand_qty", "daily_demand", "category"]):
+        st.write(issue)
+    for issue in check_graph_df(get_inventory_category_data(inventory_analysis_data), "inventory_category_data", ["total_on_hand", "avg_dio"]):
+        st.write(issue)
 
     st.divider()
 
     st.subheader("Loader Log Messages")
-    
     action_logs = [msg for msg in debug_logs if msg.startswith(("ERROR", "ADVICE", "WARNING"))]
     info_logs = [msg for msg in debug_logs if msg.startswith("INFO")]
     other_logs = [msg for msg in debug_logs if not msg.startswith(("ERROR", "ADVICE", "WARNING", "INFO"))]
-    
     for msg in action_logs:
         if "ERROR" in msg or "ADVICE" in msg:
             st.error(msg)
         elif "WARNING" in msg:
             st.warning(msg)
-            
     with st.expander("Show Full Info Log (Timings, Row Counts)"):
         for msg in other_logs: 
             st.info(msg)
