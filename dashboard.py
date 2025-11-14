@@ -1449,18 +1449,21 @@ if report_view == "Inventory Management":
         f_category = []
         f_stock_category = []
     else:
-        st.sidebar.info("📦 Filter inventory by item and category attributes")
-        # --- Material Attribute Filters (ordered by material attributes first) ---
-        f_material = create_multiselect_filter("Material Number:", f_inventory, 'Material Number', "inv_mat_num")
-        f_material_desc = create_multiselect_filter("Material Description:", f_inventory, 'Material Description', "inv_mat_desc")
-        f_pop_material = create_multiselect_filter("POP Material (POP/Non-POP):", f_inventory, 'POP Material: POP/Non POP', "inv_pop_material")
-        f_plm_level2 = create_multiselect_filter("PLM Level 2 (Wholesale/Retail):", f_inventory, 'PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)', "inv_plm_l2")
-        f_expiration = create_multiselect_filter("Expiration Flag:", f_inventory, 'POP Calculated Attributes: Expiration Flag', "inv_exp_flag")
-        f_vendor = create_multiselect_filter("Vendor Name:", f_inventory, 'POP Last Purchase: Vendor Name', "inv_vendor")
+        st.sidebar.info("📦 Filter inventory by item and category")
+        # --- Filters for available columns only ---
+        # Only create filters for columns that actually exist in the data
+        f_material = create_multiselect_filter("SKU:", f_inventory, 'sku', "inv_sku") if 'sku' in f_inventory.columns else []
+        f_category = create_multiselect_filter("Category:", f_inventory, 'category', "inv_category") if 'category' in f_inventory.columns else []
         
-        # --- Category Attribute Filters (ordered after material) ---
-        f_category = create_multiselect_filter("Category:", f_inventory, 'category', "inv_category")
-        f_stock_category = create_multiselect_filter("Stock Category Description:", f_inventory, 'Stock Category: Description', "inv_stock_cat")
+        # Note: Material attributes (description, POP/Non-POP, PLM Level, etc.) are not available
+        # in the simplified inventory_analysis. These would require joining with master data.
+        # For now, filtering by SKU and Category provides the core functionality.
+        f_material_desc = []
+        f_pop_material = []
+        f_plm_level2 = []
+        f_expiration = []
+        f_vendor = []
+        f_stock_category = []
     
     # Apply inventory-specific filters
     if st.sidebar.button("Apply Filters", width='stretch', type="primary"):
@@ -2136,31 +2139,12 @@ elif report_view == "Inventory Management":
         # Get applied filters
         applied_filters = st.session_state.get(f'applied_filters_{report_view}', {})
         
-        # Apply material attribute filters with error handling
-        if applied_filters.get('material_number') and 'Material Number' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['Material Number'].isin(applied_filters['material_number'])]
+        # Apply available filters (only sku and category exist in inventory_analysis)
+        if applied_filters.get('material_number') and 'sku' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['sku'].isin(applied_filters['material_number'])]
         
-        if applied_filters.get('material_description') and 'Material Description' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['Material Description'].isin(applied_filters['material_description'])]
-        
-        if applied_filters.get('pop_material') and 'POP Material: POP/Non POP' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['POP Material: POP/Non POP'].isin(applied_filters['pop_material'])]
-        
-        if applied_filters.get('plm_level2') and 'PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)'].isin(applied_filters['plm_level2'])]
-        
-        if applied_filters.get('expiration_flag') and 'POP Calculated Attributes: Expiration Flag' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['POP Calculated Attributes: Expiration Flag'].isin(applied_filters['expiration_flag'])]
-        
-        if applied_filters.get('vendor_name') and 'POP Last Purchase: Vendor Name' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['POP Last Purchase: Vendor Name'].isin(applied_filters['vendor_name'])]
-        
-        # Apply category attribute filters
         if applied_filters.get('category') and 'category' in f_inventory.columns:
             f_inventory = f_inventory[f_inventory['category'].isin(applied_filters['category'])]
-        
-        if applied_filters.get('stock_category') and 'Stock Category: Description' in f_inventory.columns:
-            f_inventory = f_inventory[f_inventory['Stock Category: Description'].isin(applied_filters['stock_category'])]
         
         # Calculate stock values
         f_inventory = calculate_inventory_stock_value(f_inventory)
@@ -2210,8 +2194,8 @@ elif report_view == "Inventory Management":
             dfs_to_export["Inventory_Raw_Filtered"] = (f_inventory, False)
 
             # --- Main Page Content: KPI Metrics ---
-            total_on_hand = f_inventory['POP Actual Stock Qty'].sum() if 'POP Actual Stock Qty' in f_inventory.columns else 0
-            total_in_transit = f_inventory['POP Actual Stock in Transit Qty'].sum() if 'POP Actual Stock in Transit Qty' in f_inventory.columns else 0
+            total_on_hand = f_inventory['on_hand_qty'].sum() if 'on_hand_qty' in f_inventory.columns else 0
+            total_in_transit = f_inventory['in_transit_qty'].sum() if 'in_transit_qty' in f_inventory.columns else 0
             total_stock_value_usd = f_inventory['Stock Value USD'].sum() if 'Stock Value USD' in f_inventory.columns else 0
             avg_dio = get_inventory_kpis(f_inventory)[1] if not f_inventory.empty else 0
             
@@ -2227,7 +2211,15 @@ elif report_view == "Inventory Management":
                 st.metric("📊 Weighted Avg. DIO", f"{avg_dio:.1f} days")
             
             # --- GROUP 6B: Display Inventory Anomalies ---
-            inventory_anomalies = detect_inventory_anomalies(f_inventory, sensitivity_level)
+            # Add avg_dio column for anomaly detection
+            f_inventory_for_anomalies = f_inventory.copy()
+            if 'on_hand_qty' in f_inventory_for_anomalies.columns and 'daily_demand' in f_inventory_for_anomalies.columns:
+                f_inventory_for_anomalies['avg_dio'] = np.where(
+                    f_inventory_for_anomalies['daily_demand'] > 0,
+                    f_inventory_for_anomalies['on_hand_qty'] / f_inventory_for_anomalies['daily_demand'],
+                    0
+                )
+            inventory_anomalies = detect_inventory_anomalies(f_inventory_for_anomalies, sensitivity_level)
             if inventory_anomalies['count'] > 0:
                 col_anom_left, col_anom_right = st.columns([1, 3])
                 with col_anom_left:
@@ -2275,26 +2267,23 @@ elif report_view == "Inventory Management":
             st.divider()
             st.subheader("📋 Inventory Detail")
             
-            # Prepare display columns with clean formatting
-            display_cols = [
-                'Material Number', 'Material Description', 'category', 'Stock Category: Description',
-                'POP Material: POP/Non POP', 'PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)',
-                'POP Calculated Attributes: Expiration Flag', 'POP Last Purchase: Vendor Name',
-                'POP Actual Stock Qty', 'POP Actual Stock in Transit Qty', 'Stock Value USD'
+            # Prepare display columns - only include columns that exist
+            available_display_cols = [
+                'sku', 'on_hand_qty', 'daily_demand', 'dio', 'category', 'Stock Value USD'
             ]
             
-            # Only include columns that exist
-            available_cols = [col for col in display_cols if col in f_inventory.columns]
-            inventory_display = f_inventory[available_cols].copy()
+            inventory_display = f_inventory[[col for col in available_display_cols if col in f_inventory.columns]].copy()
             
             # Format the table for display
             format_dict = {}
             for col in inventory_display.columns:
                 col_lower = str(col).lower()
-                if 'qty' in col_lower or 'quantity' in col_lower:
+                if 'qty' in col_lower or 'quantity' in col_lower or 'demand' in col_lower:
                     format_dict[col] = '{:,.0f}'  # Format with thousands separator, no decimals
                 elif 'stock value' in col_lower or 'price' in col_lower:
                     format_dict[col] = '${:,.2f}'  # Format as currency
+                elif 'dio' in col_lower:
+                    format_dict[col] = '{:.2f}'  # 2 decimals for DIO
             
             st.dataframe(inventory_display.style.format(format_dict), width='stretch')
 
