@@ -1008,6 +1008,13 @@ def remove_demand_anomalies(daily_demand_df: pd.DataFrame, sensitivity: str = 'N
     Q3 = df['daily_qty'].quantile(0.75)
     IQR = Q3 - Q1
     
+    # DEFENSIVE: Handle edge case when IQR is 0 (all values identical)
+    if IQR == 0:
+        # No anomalies to remove if all values are the same
+        df.attrs['anomalies_removed'] = 0
+        df.attrs['bounds'] = {'lower': Q1, 'upper': Q1}
+        return df
+    
     # Define outlier bounds
     lower_bound = Q1 - (multiplier * IQR)
     upper_bound = Q3 + (multiplier * IQR)
@@ -1554,17 +1561,28 @@ else:
         st.sidebar.info("📈 Demand Forecasting uses all historical data for accurate trend analysis. Filter by Customer, Category, or Product instead.")
 
     # --- Org #3: Use helper function for consistent multiselect widgets ---
-    f_customer = create_multiselect_filter("Select Customer(s):", filter_source_df, 'customer_name', "customer")
-    f_material = create_multiselect_filter("Select Material(s):", filter_source_df, 'product_name', "material")
-    f_category = create_multiselect_filter("Select Category:", filter_source_df, 'category', "category")
-    f_sales_org = create_multiselect_filter("Select Sales Org(s):", filter_source_df, 'sales_org', "sales_org")
-    f_order_type = create_multiselect_filter("Select Order Type(s):", filter_source_df, 'order_type', "order_type")
-
-    # --- FIX: Order Reason is an outbound metric (ORDERS.csv/DELIVERIES.csv only) ---
-    # Should NEVER be considered for Inventory reports. Only show for Backorder reports.
+    # DEFENSIVE: Always initialize f_order_reason first to prevent undefined variable errors
     f_order_reason = []
-    if report_view == "Backorder Report":
-        f_order_reason = st.sidebar.multiselect("Select Order Reason(s):", get_unique_values(filter_source_df, 'order_reason'), key="order_reason")
+    
+    if not filter_source_df.empty:
+        f_customer = create_multiselect_filter("Select Customer(s):", filter_source_df, 'customer_name', "customer")
+        f_material = create_multiselect_filter("Select Material(s):", filter_source_df, 'product_name', "material")
+        f_category = create_multiselect_filter("Select Category:", filter_source_df, 'category', "category")
+        f_sales_org = create_multiselect_filter("Select Sales Org(s):", filter_source_df, 'sales_org', "sales_org")
+        f_order_type = create_multiselect_filter("Select Order Type(s):", filter_source_df, 'order_type', "order_type")
+        
+        # --- FIX: Order Reason is an outbound metric (ORDERS.csv/DELIVERIES.csv only) ---
+        # Should NEVER be considered for Inventory reports. Only show for Backorder reports.
+        if report_view == "Backorder Report":
+            f_order_reason = st.sidebar.multiselect("Select Order Reason(s):", get_unique_values(filter_source_df, 'order_reason'), key="order_reason")
+    else:
+        # No data available - initialize empty filter lists
+        f_customer = []
+        f_material = []
+        f_category = []
+        f_sales_org = []
+        f_order_type = []
+        st.sidebar.warning("⚠️ No data available for filter options.")
 
     if st.sidebar.button("Apply Filters", width='stretch', type="primary"):
         # Store BOTH the applied filters (for comparison) AND widget values (for current state)
@@ -1644,6 +1662,9 @@ if report_view == "📈 Demand Forecasting":
     
     col_anom_1, col_anom_2 = st.columns(2)
     
+    # Initialize anomaly_sensitivity with default value
+    anomaly_sensitivity = None
+    
     with col_anom_1:
         remove_anomalies = st.checkbox(
             "🔍 Remove Statistical Anomalies",
@@ -1659,8 +1680,6 @@ if report_view == "📈 Demand Forecasting":
                 index=1,
                 help="Aggressive: Remove extreme outliers only | Normal: Balanced | Conservative: Remove more deviations"
             )
-        else:
-            anomaly_sensitivity = None
     # Note: Sourced from ORDERS.csv via load_orders_item_lookup in load_all_data()
     orders_item_data = st.session_state.get('master_data', pd.DataFrame())  # This gets populated during data load
     
@@ -1705,8 +1724,16 @@ if report_view == "📈 Demand Forecasting":
                 else:
                     # Determine forecast horizon
                     if auto_horizon:
-                        avg_lead_time = np.mean([v['lead_time_days'] for v in lead_time_lookup.values()]) if lead_time_lookup else 90
-                        forecast_horizon = int(avg_lead_time)
+                        try:
+                            if lead_time_lookup and len(lead_time_lookup) > 0:
+                                lead_times = [v['lead_time_days'] for v in lead_time_lookup.values() if isinstance(v, dict) and 'lead_time_days' in v]
+                                avg_lead_time = np.mean(lead_times) if lead_times else 90
+                            else:
+                                avg_lead_time = 90
+                            forecast_horizon = int(max(0, avg_lead_time))
+                        except Exception as e:
+                            st.warning(f"Could not calculate average lead time: {e}. Using default 90 days.")
+                            forecast_horizon = 90
                     else:
                         forecast_horizon = 90
                     
