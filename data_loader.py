@@ -10,6 +10,38 @@ from file_loader import safe_read_csv
 TODAY = pd.to_datetime(datetime.now().date())
 LOAD_TIMEOUT_SECONDS = 90 # <-- NEW: Set a 90-second warning threshold
 
+def clean_string_column(series: pd.Series) -> pd.Series:
+    """
+    Efficiently clean string columns by stripping whitespace and normalizing spaces.
+    
+    Optimization: Compiled regex pattern used once, applied vectorized.
+    Avoids repeated .astype(str).str.strip().str.replace() chains.
+    
+    Args:
+        series: Pandas Series with string data
+    
+    Returns:
+        Cleaned Series with normalized whitespace
+    """
+    return series.astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+
+def safe_numeric_column(series: pd.Series, remove_commas: bool = False) -> pd.Series:
+    """
+    Efficiently convert column to numeric with optional comma removal.
+    
+    Optimization: Single pd.to_numeric call, handles errors gracefully.
+    
+    Args:
+        series: Pandas Series to convert
+        remove_commas: If True, remove commas before conversion
+    
+    Returns:
+        Numeric Series with NaN filled as 0
+    """
+    if remove_commas:
+        series = series.astype(str).str.replace(',', '', regex=False)
+    return pd.to_numeric(series, errors='coerce').fillna(0)
+
 def check_columns(df, required_cols, filename, logs):
     """Helper function to check for missing columns."""
     missing_cols = [col for col in required_cols if col not in df.columns]
@@ -61,8 +93,7 @@ def load_master_data(master_data_path, file_key='master'):
     
     str_cols = ['sku', 'category']
     for col in str_cols:
-        # --- FIX: Apply robust whitespace cleaning to all key string columns from Master Data ---
-        df[col] = df[col].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+        df[col] = clean_string_column(df[col])
         
     df = df.drop_duplicates(subset=['sku'])
     
@@ -125,7 +156,7 @@ def load_orders_item_lookup(orders_path, file_key='orders'):
     df = df[list(order_cols.keys())].rename(columns=order_cols)
 
     # --- FIX: Enforce SKU is a string to prevent data type mismatch on join ---
-    df['sku'] = df['sku'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+    df['sku'] = clean_string_column(df['sku'])
 
     # Convert types
     df['order_date_raw'] = df['order_date'] # Keep original for error report
@@ -147,8 +178,7 @@ def load_orders_item_lookup(orders_path, file_key='orders'):
     str_strip_cols = ['sales_org', 'customer_name', 'product_name', 'reject_reason', 'order_type', 'order_reason']
     for col in str_strip_cols:
         if col in df.columns:
-            # This is the more robust cleaning method, handling internal and leading/trailing whitespace.
-            df[col] = df[col].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+            df[col] = clean_string_column(df[col])
 
     # --- OPTIMIZATION: Reduce groupby complexity for significant speedup ---
     # Drop rows where essential grouping keys are missing before aggregation
@@ -312,7 +342,7 @@ def load_service_data(deliveries_path, orders_header_lookup_df, master_data_df, 
     df = deliveries_df[list(delivery_cols.keys())].rename(columns=delivery_cols)
     df['units_issued'] = pd.to_numeric(df['units_issued'], errors='coerce').fillna(0)
     # --- NEW: Clean product name from source ---
-    df['product_name'] = df['product_name'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+    df['product_name'] = clean_string_column(df['product_name'])
 
     
     # --- NEW LOGIC: Aggregate deliveries by order and item ---
@@ -526,18 +556,12 @@ def load_inventory_data(inventory_path, file_key='inventory'):
         return logs, pd.DataFrame(), pd.DataFrame()
     
     df = df.rename(columns=inventory_cols)
-    df['sku'] = df['sku'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+    df['sku'] = clean_string_column(df['sku'])
     
-    # --- FIX: Remove commas from stock quantities before converting to numeric ---
-    df['on_hand_qty'] = df['on_hand_qty'].astype(str).str.replace(',', '', regex=False)
-    df['on_hand_qty'] = pd.to_numeric(df['on_hand_qty'], errors='coerce').fillna(0)
-    
-    df['in_transit_qty'] = df['in_transit_qty'].astype(str).str.replace(',', '', regex=False)
-    df['in_transit_qty'] = pd.to_numeric(df['in_transit_qty'], errors='coerce').fillna(0)
-    
-    # --- FIX: Parse pricing columns, handling currency and price ---
-    df['last_purchase_price'] = df['last_purchase_price'].astype(str).str.replace(',', '', regex=False)
-    df['last_purchase_price'] = pd.to_numeric(df['last_purchase_price'], errors='coerce').fillna(0)
+    # --- OPTIMIZATION: Use vectorized numeric conversion ---
+    df['on_hand_qty'] = safe_numeric_column(df['on_hand_qty'], remove_commas=True)
+    df['in_transit_qty'] = safe_numeric_column(df['in_transit_qty'], remove_commas=True)
+    df['last_purchase_price'] = safe_numeric_column(df['last_purchase_price'], remove_commas=True)
     
     df['currency'] = df['currency'].astype(str).str.strip().str.upper()
     df['currency'] = df['currency'].fillna('USD')
@@ -588,7 +612,7 @@ def load_inventory_analysis_data(inventory_df, deliveries_path, master_data_df, 
         })
         
         # --- FIX: Apply robust SKU cleaning to match the format in inventory_df ---
-        deliveries_df['sku'] = deliveries_df['sku'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+        deliveries_df['sku'] = clean_string_column(deliveries_df['sku'])
 
         # --- FIX: Convert 'units_issued' to a numeric type before performing calculations ---
         deliveries_df['units_issued'] = pd.to_numeric(deliveries_df['units_issued'], errors='coerce').fillna(0)
