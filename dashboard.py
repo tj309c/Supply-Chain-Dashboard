@@ -2187,7 +2187,7 @@ elif report_view == "Inventory Management":
             total_on_hand = f_inventory['POP Actual Stock Qty'].sum() if 'POP Actual Stock Qty' in f_inventory.columns else 0
             total_in_transit = f_inventory['POP Actual Stock in Transit Qty'].sum() if 'POP Actual Stock in Transit Qty' in f_inventory.columns else 0
             total_stock_value_usd = f_inventory['Stock Value USD'].sum() if 'Stock Value USD' in f_inventory.columns else 0
-            avg_dio = get_inventory_kpis(f_inventory)[1] if f_inventory else 0
+            avg_dio = get_inventory_kpis(f_inventory)[1] if not f_inventory.empty else 0
             
             # Display KPIs in 2x2 grid for better aesthetics
             kpi_cols = st.columns(4)
