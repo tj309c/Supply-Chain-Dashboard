@@ -846,6 +846,7 @@ def calculate_demand_forecast(orders_df: pd.DataFrame, ma_window_days: int = 120
     
     Uses configurable time windows (60/120/240/360 days) to calculate moving average,
     then extrapolates forward based on forecast horizon (lead time + safety stock).
+    Includes confidence band (±1 std dev) around forecast to show uncertainty range.
     
     Args:
         orders_df: Orders dataframe with 'order_date' and 'ORDER_QTY' columns
@@ -854,7 +855,7 @@ def calculate_demand_forecast(orders_df: pd.DataFrame, ma_window_days: int = 120
         group_by: 'all' (overall), 'category', 'customer_name', or 'sales_org'
     
     Returns:
-        DataFrame with historical and forecasted demand
+        Dictionary with forecast data including confidence bands
     """
     if orders_df.empty:
         return pd.DataFrame()
@@ -872,6 +873,10 @@ def calculate_demand_forecast(orders_df: pd.DataFrame, ma_window_days: int = 120
     # Calculate moving average
     daily_demand['ma'] = daily_demand['daily_qty'].rolling(window=ma_window_days, min_periods=1).mean()
     
+    # Calculate volatility (standard deviation) from recent data for confidence bands
+    recent_residuals = (daily_demand['daily_qty'] - daily_demand['ma']).iloc[-ma_window_days:] if len(daily_demand) >= ma_window_days else (daily_demand['daily_qty'] - daily_demand['ma'])
+    volatility = recent_residuals.std() if len(recent_residuals) > 1 else daily_demand['daily_qty'].std() * 0.2
+    
     # Get latest MA value as baseline for forecast
     latest_ma = daily_demand['ma'].iloc[-1] if len(daily_demand) > 0 else 0
     
@@ -888,16 +893,24 @@ def calculate_demand_forecast(orders_df: pd.DataFrame, ma_window_days: int = 120
     trend_multiplier = 1 + (trend_pct / 100)
     forecast_qty = [latest_ma * trend_multiplier] * forecast_horizon_days
     
+    # Create confidence bands (±1 std dev = ~68% confidence interval)
+    forecast_upper = [latest_ma * trend_multiplier + volatility] * forecast_horizon_days
+    forecast_lower = [max(0, latest_ma * trend_multiplier - volatility)] * forecast_horizon_days
+    
     # Create forecast dataframe
     forecast_df = pd.DataFrame({
         'date': forecast_dates,
         'daily_qty': forecast_qty,
         'ma': forecast_qty,
+        'upper_band': forecast_upper,
+        'lower_band': forecast_lower,
         'type': 'forecast'
     })
     
-    # Add historical marker
+    # Add historical marker and bands (for smooth chart transition)
     daily_demand['type'] = 'historical'
+    daily_demand['upper_band'] = daily_demand['daily_qty']
+    daily_demand['lower_band'] = daily_demand['daily_qty']
     
     # Combine
     combined = pd.concat([daily_demand, forecast_df], ignore_index=True)
@@ -908,7 +921,8 @@ def calculate_demand_forecast(orders_df: pd.DataFrame, ma_window_days: int = 120
         'trend': 'Increasing' if trend_pct > 1 else 'Decreasing' if trend_pct < -1 else 'Stable',
         'trend_pct': trend_pct,
         'ma_window': ma_window_days,
-        'forecast_horizon': forecast_horizon_days
+        'forecast_horizon': forecast_horizon_days,
+        'volatility': volatility
     }
 
 
@@ -1683,7 +1697,7 @@ if report_view == "📈 Demand Forecasting":
                             st.divider()
                             
                             # Plot forecast
-                            st.subheader("Demand Trend & Forecast")
+                            st.subheader("Demand Trend & Forecast (with Confidence Band)")
                             
                             # Prepare data for visualization
                             historical = forecast_df[forecast_df['type'] == 'historical'].tail(365)
@@ -1691,6 +1705,8 @@ if report_view == "📈 Demand Forecasting":
                             
                             if not historical.empty and not forecast_data.empty:
                                 fig = go.Figure()
+                                
+                                # Add historical demand
                                 fig.add_trace(go.Scatter(
                                     x=historical['date'],
                                     y=historical['daily_qty'],
@@ -1698,6 +1714,8 @@ if report_view == "📈 Demand Forecasting":
                                     mode='lines',
                                     line=dict(color='blue', width=2)
                                 ))
+                                
+                                # Add historical moving average
                                 fig.add_trace(go.Scatter(
                                     x=historical['date'],
                                     y=historical['ma'],
@@ -1705,25 +1723,49 @@ if report_view == "📈 Demand Forecasting":
                                     mode='lines',
                                     line=dict(color='green', width=2, dash='dash')
                                 ))
+                                
+                                # Add forecast line
                                 fig.add_trace(go.Scatter(
                                     x=forecast_data['date'],
                                     y=forecast_data['daily_qty'],
                                     name='Forecast',
                                     mode='lines',
-                                    line=dict(color='orange', width=2, dash='dot'),
-                                    fill='tozeroy'
+                                    line=dict(color='orange', width=2, dash='dot')
                                 ))
+                                
+                                # Add upper confidence band
+                                fig.add_trace(go.Scatter(
+                                    x=forecast_data['date'],
+                                    y=forecast_data['upper_band'],
+                                    name='Upper Band (+1σ)',
+                                    mode='lines',
+                                    line=dict(width=0),
+                                    showlegend=False
+                                ))
+                                
+                                # Add lower confidence band and fill between
+                                fig.add_trace(go.Scatter(
+                                    x=forecast_data['date'],
+                                    y=forecast_data['lower_band'],
+                                    name='Confidence Band (±1σ)',
+                                    mode='lines',
+                                    line=dict(width=0),
+                                    fillcolor='rgba(255, 165, 0, 0.15)',
+                                    fill='tonexty'
+                                ))
+                                
                                 fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
                                 fig.update_xaxes(title_text="Date")
                                 fig.update_yaxes(title_text="Daily Demand (Units)")
                                 st.plotly_chart(fig, use_container_width=True)
                                 
-                                # Show forecast summary
+                                # Show forecast summary with volatility
                                 st.subheader("Forecast Summary")
-                                col_summary_1, col_summary_2, col_summary_3 = st.columns(3)
+                                col_summary_1, col_summary_2, col_summary_3, col_summary_4 = st.columns(4)
                                 recent_avg = historical['daily_qty'].tail(30).mean()
                                 historical_avg = historical['daily_qty'].mean()
                                 forecast_avg = forecast_data['daily_qty'].mean()
+                                volatility = forecast_result.get('volatility', 0)
                                 
                                 with col_summary_1:
                                     st.metric("Recent Avg (30d)", f"{recent_avg:.0f}", f"{((recent_avg/historical_avg - 1)*100):+.1f}%")
@@ -1731,8 +1773,11 @@ if report_view == "📈 Demand Forecasting":
                                     st.metric("Historical Avg", f"{historical_avg:.0f}")
                                 with col_summary_3:
                                     st.metric("Forecast Avg", f"{forecast_avg:.0f}")
+                                with col_summary_4:
+                                    st.metric("Volatility (±σ)", f"{volatility:.0f} units")
                             else:
                                 st.warning("Insufficient data to generate forecast visualization.")
+
                         else:
                             st.warning("Forecast calculation did not return expected data structure.")
                     else:
