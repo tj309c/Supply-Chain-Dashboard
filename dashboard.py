@@ -374,7 +374,15 @@ if 'last_load_time' in st.session_state:
 
 # --- NEW: Initialize data on first run or after a reload request ---
 if 'data_loaded' not in st.session_state or not st.session_state.get('data_loaded'):
-    load_all_data()
+    try:
+        load_all_data()
+    except Exception as e:
+        st.error(f"❌ Critical error loading data: {str(e)[:200]}")
+        st.info("💡 **Troubleshooting:** Check that all CSV files exist in the /data folder or are uploaded.")
+        import traceback
+        with st.expander("Error Details"):
+            st.text(traceback.format_exc())
+        st.stop()
 
 # --- NEW: Initialize report-specific filter states and caches ---
 if f'active_filters_Service Level' not in st.session_state:

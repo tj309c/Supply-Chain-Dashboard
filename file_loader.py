@@ -21,7 +21,12 @@ def get_file_source(file_key: str, file_path: str):
     Returns:
         tuple: (source, is_uploaded) where source is file-like or path, is_uploaded is bool
     """
-    uploaded_files = st.session_state.get('uploaded_files', {})
+    # Try to get uploaded files, but handle case where st.session_state is not available
+    try:
+        uploaded_files = st.session_state.get('uploaded_files', {})
+    except (AttributeError, RuntimeError):
+        # st.session_state not available (running outside Streamlit context)
+        uploaded_files = {}
     
     if file_key in uploaded_files:
         # Return the uploaded buffer
