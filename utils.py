@@ -113,6 +113,57 @@ def enrich_orders_with_category(orders_df: pd.DataFrame, master_data_df: pd.Data
     return result
 
 
+def get_cached_report_data(report_view: str, data_loader_func, *loader_args) -> pd.DataFrame:
+    """
+    Lazy-load and cache report data to avoid reloading on every filter change.
+    
+    Implements the "lazy filter application" pattern:
+    - Load data once per report and cache in session_state
+    - Don't reload when filter widgets change
+    - Only apply filters when user clicks "Apply Filters"
+    
+    This significantly improves performance when users select multiple filters
+    before applying them (no intermediate data reloads).
+    
+    Args:
+        report_view: Report name for cache key (e.g., "Service Level", "Backorder Report")
+        data_loader_func: Function to call to load data
+        *loader_args: Arguments to pass to the loader function
+    
+    Returns:
+        Cached DataFrame or newly loaded DataFrame if not cached
+    
+    Example:
+        import streamlit as st
+        data = get_cached_report_data(
+            report_view,
+            load_service_data,
+            SERVICE_FILE_PATH,
+            log_output
+        )
+    """
+    import streamlit as st
+    
+    cache_key = f'df_report_{report_view}'
+    
+    if cache_key not in st.session_state:
+        try:
+            # Load data for the first time
+            result = data_loader_func(*loader_args)
+            # Handle different return formats (some loaders return (logs, data, errors))
+            if isinstance(result, tuple):
+                df = result[1] if len(result) > 1 else pd.DataFrame()
+            else:
+                df = result
+            # Cache it
+            st.session_state[cache_key] = df
+        except Exception as e:
+            print(f"Error loading data for {report_view}: {e}")
+            st.session_state[cache_key] = pd.DataFrame()
+    
+    return st.session_state[cache_key]
+
+
 def get_filtered_data_as_excel_with_metadata(dfs_to_export_dict, metadata_dict=None, formatting_config=None):
     """
     Enhanced export function that includes metadata sheet with filter criteria and formatting options.
