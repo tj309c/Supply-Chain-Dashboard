@@ -1188,6 +1188,60 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
 
     return df[combined_mask]
 
+# --- LAZY FILTER LOADING: Cache filtered data separately from raw data ---
+def get_lazy_filtered_data(raw_df: pd.DataFrame, report_view: str, 
+                           f_year, f_month, f_customer, f_category, f_material, 
+                           f_sales_org, f_order_type, f_order_reason=None) -> tuple:
+    """
+    Implement lazy filter loading pattern to avoid data reloads on filter widget changes.
+    
+    Strategy:
+    - Stores applied_filters_{report_view} = filters last time "Apply Filters" button was clicked
+    - Compares current widget state to applied_filters
+    - If different, returns raw_df and shows message
+    - If same, returns filtered_df
+    
+    Args:
+        raw_df: Unfiltered data for this report
+        report_view: Report name (e.g., "Service Level", "Backorder Report")
+        f_year, f_month, f_customer, f_category, f_material, f_sales_org, f_order_type, f_order_reason: Current widget values
+    
+    Returns:
+        Tuple of (dataframe_to_display, bool_indicating_pending_filters)
+    """
+    if f_order_reason is None:
+        f_order_reason = []
+    
+    # Get the filters that were actually applied (saved on button click)
+    applied_filters = st.session_state.get(f'applied_filters_{report_view}', {})
+    
+    # Build current widget state
+    current_widget_state = {
+        'order_year': f_year,
+        'order_month': f_month,
+        'customer_name': f_customer,
+        'category': f_category,
+        'product_name': f_material,
+        'sales_org': f_sales_org,
+        'order_type': f_order_type,
+        'order_reason': f_order_reason,
+    }
+    
+    # Check if user has made changes to filters since last apply
+    filters_match = (current_widget_state == applied_filters)
+    
+    if filters_match and applied_filters:
+        # Use previously applied filters - no refresh on screen
+        return apply_filters(raw_df, applied_filters), False
+    else:
+        # Show unfiltered data until user clicks Apply Filters
+        # has_pending = True if user has made filter changes OR had filters before
+        has_pending = bool(applied_filters) or any(
+            v for v in current_widget_state.values() 
+            if v and v != 'All' and v != []
+        )
+        return raw_df, has_pending
+
 # --- Helper function to safely get unique values ---
 def get_unique_values(df: pd.DataFrame, column: str) -> list:
     """
@@ -1425,8 +1479,10 @@ else:
         f_order_reason = st.sidebar.multiselect("Select Order Reason(s):", get_unique_values(filter_source_df, 'order_reason'), key="order_reason")
 
     if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
-        # Store filters in a report-specific key
-        st.session_state[f'active_filters_{report_view}'] = {
+        # Store BOTH the applied filters (for comparison) AND widget values (for current state)
+        # applied_filters = last saved state (what is currently rendered)
+        # active_filters = widget values saved for lazy loading comparison
+        filter_dict = {
             'order_year': f_year,
             'order_month': f_month,
             'customer_name': f_customer,
@@ -1436,6 +1492,8 @@ else:
             'order_type': f_order_type,
             'order_reason': f_order_reason if 'f_order_reason' in locals() else []
         }
+        st.session_state[f'applied_filters_{report_view}'] = filter_dict  # Filters currently rendered
+        st.session_state[f'active_filters_{report_view}'] = filter_dict   # Filters to compare against
 
 # === GROUP 6D: Demand Forecasting Report ===
 if report_view == "📈 Demand Forecasting":
@@ -1539,19 +1597,22 @@ if report_view == "📈 Demand Forecasting":
             st.warning("No orders data available for forecasting.")
         else:
             try:
-                # --- Apply filters to orders data if any are set ---
-                active_filters = st.session_state.get(f'active_filters_{report_view}', {})
+                # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
+                orders_data_filtered, has_pending_filters = get_lazy_filtered_data(
+                    orders_data, report_view,
+                    f_year, f_month, f_customer, f_category, f_material, f_sales_org, f_order_type
+                )
                 
                 # Show active filters indicator
-                active_filter_count = len([v for v in active_filters.values() if v and v != 'All' and v != []])
+                active_filter_count = len([v for v in st.session_state.get(f'applied_filters_{report_view}', {}).values() 
+                                          if v and v != 'All' and v != []])
                 if active_filter_count > 0:
-                    st.info(f"📊 Forecast filtered by {active_filter_count} criterion/criteria - Apply Filters to change")
+                    st.info(f"📊 Forecast filtered by {active_filter_count} criterion/criteria - Click 'Apply Filters' to change")
                 
-                # Apply filters to orders data before forecasting
-                if active_filters:
-                    orders_data = apply_filters(orders_data, active_filters)
+                if has_pending_filters:
+                    st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the forecast.")
                 
-                if orders_data.empty:
+                if orders_data_filtered.empty:
                     st.warning("⚠️ No orders match the selected filters. Try adjusting your filter selections.")
                 else:
                     # Determine forecast horizon
@@ -1563,9 +1624,9 @@ if report_view == "📈 Demand Forecasting":
                     
                     # Prepare orders data for forecasting (ensure column names match calculate_demand_forecast expectations)
                     # Expected columns: order_date, ORDER_QTY (or ordered_qty from load_orders_item_lookup)
-                    if 'ordered_qty' in orders_data.columns and 'order_date' in orders_data.columns:
+                    if 'ordered_qty' in orders_data_filtered.columns and 'order_date' in orders_data_filtered.columns:
                         # Rename for compatibility with calculate_demand_forecast function
-                        forecast_input = orders_data[['order_date', 'ordered_qty']].copy()
+                        forecast_input = orders_data_filtered[['order_date', 'ordered_qty']].copy()
                         forecast_input.columns = ['order_date', 'ORDER_QTY']
                         
                         forecast_result = calculate_demand_forecast(
@@ -1713,9 +1774,11 @@ else:
 
 
 if report_view == "Service Level":
-    # --- Apply filters for THIS view ---
-    active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-    f_service = apply_filters(service_data, active_filters)
+    # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
+    f_service, has_pending_filters = get_lazy_filtered_data(
+        service_data, report_view, 
+        f_year, f_month, f_customer, f_category, f_material, f_sales_org, f_order_type
+    )
 
     # --- Set other dataframes to their unfiltered state ---
     f_backorder = backorder_data
@@ -1723,22 +1786,9 @@ if report_view == "Service Level":
 
     # --- Tab 1: Service Level ---
     with tab_service:
-        # --- UPDATED: Show a message if filters have changed but not been applied (with caching - Perf #4) ---
-        # We create a dictionary from the current widget state to compare (only if not in inventory view)
-        if report_view != "Inventory Management":
-            current_widget_state = {
-                'order_year': f_year, 'order_month': f_month, 'customer_name': f_customer,
-                'category': f_category, 'product_name': f_material, 'sales_org': f_sales_org,
-                'order_type': f_order_type, 'order_reason': [] # No order reason on service
-            }
-            active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-            
-            # Check cache (Perf #4: avoid redundant dictionary comparisons)
-            if current_widget_state != active_filters:
-                st.session_state[f'cached_filter_changed_{report_view}'] = True
-                st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
-            else:
-                st.session_state[f'cached_filter_changed_{report_view}'] = False
+        # Show message if filters have been changed but not applied
+        if has_pending_filters:
+            st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
 
         st.header("Service Level Performance (Shipped Orders)")
         dfs_to_export = {} # Initialize here
@@ -1851,32 +1901,23 @@ if report_view == "Service Level":
                     }), use_container_width=True, hide_index=True)
 
 elif report_view == "Backorder Report":
-    # --- Apply filters for THIS view ---
-    active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-    f_backorder = apply_filters(backorder_data, active_filters)
+    # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
+    f_backorder, has_pending_filters = get_lazy_filtered_data(
+        backorder_data, report_view, 
+        f_year, f_month, f_customer, f_category, f_material, f_sales_org, f_order_type, f_order_reason
+    )
 
     # --- Set other dataframes to their unfiltered state ---
     f_service = service_data
     f_inventory = inventory_analysis_data
 
     with tab_service:
-        # --- UPDATED: Show a message if filters have changed but not been applied (with caching - Perf #4) ---
-        if report_view != "Inventory Management":
-            current_widget_state = {
-                'order_year': f_year, 'order_month': f_month, 'customer_name': f_customer,
-                'category': f_category, 'product_name': f_material, 'sales_org': f_sales_org,
-                'order_type': f_order_type, 'order_reason': f_order_reason  # Safe: f_order_reason defined for all reports
-            }
-            active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-            
-            # Check cache (Perf #4: avoid redundant dictionary comparisons)
-            if current_widget_state != active_filters:
-                st.session_state[f'cached_filter_changed_{report_view}'] = True
-                st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
-            else:
-                st.session_state[f'cached_filter_changed_{report_view}'] = False
+        # Show message if filters have been changed but not applied
+        if has_pending_filters:
+            st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
 
         st.header("Backorder Analysis (Unfulfilled Orders)")
+
         dfs_to_export = {} # Initialize here
         if f_backorder.empty:
             active_filter_count = len([v for v in st.session_state.get(f'active_filters_{report_view}', {}).values() if v and v != 'All'])
@@ -1970,18 +2011,25 @@ elif report_view == "Backorder Report":
                     }), use_container_width=True)
 
 elif report_view == "Inventory Management":
-    # --- Apply filters for THIS view ---
-    active_filters = st.session_state.get(f'active_filters_{report_view}', {})
-    f_inventory = apply_filters(inventory_analysis_data, active_filters)
+    # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
+    f_inventory, has_pending_filters = get_lazy_filtered_data(
+        inventory_analysis_data, report_view, 
+        f_year, f_month, f_customer, f_category, f_material, f_sales_org, f_order_type
+    )
 
     # --- Set other dataframes to their unfiltered state ---
     f_service = service_data
     f_backorder = backorder_data
 
     with tab_service:
+        # Show message if filters have been changed but not applied
+        if has_pending_filters:
+            st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
+            
         # Note: Filters like year, month, customer, etc., may not apply to a simple inventory snapshot.
         # The filtering logic is kept for consistency, but may result in an empty set if the inventory data lacks those columns.
         st.header("Inventory Position")
+
         dfs_to_export = {} # Initialize here
         if f_inventory.empty:
             st.error("❌ No inventory data available.", icon="🚫")
