@@ -1413,23 +1413,39 @@ sensitivity_level = anomaly_sensitivity.split()[0]
 st.sidebar.divider()
 
 if report_view == "Inventory Management":
-    # --- Inventory-specific filters ---
-    st.sidebar.info("📊 This report shows the current inventory snapshot and has no filters.")
+    # --- Inventory-specific filters: Only Category and Material (item attributes) ---
+    st.sidebar.info("📦 Filter by item attributes. Inventory snapshot filters by Product and Category only.")
     f_inventory = inventory_analysis_data
     
     # Set other filtered dataframes to their unfiltered state so the app doesn't break
     f_service = service_data
     f_backorder = backorder_data
     
-    # Initialize filter variables as empty for Inventory (not used but needed for later code)
+    # Initialize filter variables - only use category and material for Inventory
     f_year = "All"
     f_month = "All"
     f_customer = []
-    f_material = []
-    f_category = []
+    f_material = create_multiselect_filter("Select Product(s):", inventory_analysis_data, 'product_name', "inv_material")
+    f_category = create_multiselect_filter("Select Category:", inventory_analysis_data, 'category', "inv_category")
     f_sales_org = []
     f_order_type = []
     f_order_reason = []
+    
+    # Apply inventory-specific filters
+    if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
+        filter_dict = {
+            'order_year': "All",
+            'order_month': "All",
+            'customer_name': [],
+            'category': f_category,
+            'product_name': f_material,
+            'sales_org': [],
+            'order_type': [],
+            'order_reason': []
+        }
+        st.session_state[f'applied_filters_{report_view}'] = filter_dict
+        st.session_state[f'active_filters_{report_view}'] = filter_dict
+        st.success("✅ Inventory filters applied!")
 
 else:
     # --- Global Filters for Service and Backorder Reports ---
@@ -2073,23 +2089,39 @@ elif report_view == "Backorder Report":
                     }), use_container_width=True)
 
 elif report_view == "Inventory Management":
-    # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
-    f_inventory, has_pending_filters = get_lazy_filtered_data(
-        inventory_analysis_data, report_view, 
-        f_year, f_month, f_customer, f_category, f_material, f_sales_org, f_order_type
-    )
-
+    # --- Apply inventory-specific filters (Category and Material only) ---
+    f_inventory = inventory_analysis_data.copy()
+    
+    # Apply category filter if selected
+    applied_filters = st.session_state.get(f'applied_filters_{report_view}', {})
+    if applied_filters.get('category'):
+        f_inventory = f_inventory[f_inventory['category'].isin(applied_filters['category'])]
+    
+    # Apply material (product) filter if selected
+    if applied_filters.get('product_name'):
+        f_inventory = f_inventory[f_inventory['product_name'].isin(applied_filters['product_name'])]
+    
     # --- Set other dataframes to their unfiltered state ---
     f_service = service_data
     f_backorder = backorder_data
+    
+    # Check if filters have been changed but not applied
+    has_pending_filters = applied_filters != {
+        'order_year': "All",
+        'order_month': "All",
+        'customer_name': [],
+        'category': [],
+        'product_name': [],
+        'sales_org': [],
+        'order_type': [],
+        'order_reason': []
+    }
 
     with tab_service:
         # Show message if filters have been changed but not applied
         if has_pending_filters:
             st.info("You have changed the filters. Click 'Apply Filters' in the sidebar to update the report.")
             
-        # Note: Filters like year, month, customer, etc., may not apply to a simple inventory snapshot.
-        # The filtering logic is kept for consistency, but may result in an empty set if the inventory data lacks those columns.
         st.header("Inventory Position")
 
         dfs_to_export = {} # Initialize here

@@ -22,3 +22,7 @@ Collecting usage statistics. To deactivate, set browser.gatherUsageStats to fals
   External URL: http://172.210.53.224:8502
 
 2025-11-14 00:17:41.571 Setting up signal handler
+  Stopping...
+2025-11-14 00:26:41.179 Runtime stopping...
+2025-11-14 00:26:41.180 Runtime state: RuntimeState.NO_SESSIONS_CONNECTED -> RuntimeState.STOPPING
+2025-11-14 00:26:41.181 Runtime state: RuntimeState.STOPPING -> RuntimeState.STOPPED
