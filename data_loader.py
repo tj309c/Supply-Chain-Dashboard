@@ -505,10 +505,13 @@ def load_inventory_data(inventory_path, file_key='inventory'):
     start_time = time.time()
     logs.append("--- Inventory Snapshot Loader ---")
     
-    # --- UPDATED: Use the correct column names from your file ---
+    # --- UPDATED: Load stock quantities AND pricing columns for stock value calculation ---
     inventory_cols = {
         "Material Number": "sku",
-        "POP Actual Stock Qty": "on_hand_qty"
+        "POP Actual Stock Qty": "on_hand_qty",
+        "POP Actual Stock in Transit Qty": "in_transit_qty",
+        "POP Last Purchase: Price in Purch. Currency": "last_purchase_price",
+        "POP Last Purchase: Currency": "currency"
     }
     
     try:
@@ -524,16 +527,32 @@ def load_inventory_data(inventory_path, file_key='inventory'):
     
     df = df.rename(columns=inventory_cols)
     df['sku'] = df['sku'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
-    # --- FIX: Remove commas from stock quantity before converting to numeric ---
+    
+    # --- FIX: Remove commas from stock quantities before converting to numeric ---
     df['on_hand_qty'] = df['on_hand_qty'].astype(str).str.replace(',', '', regex=False)
     df['on_hand_qty'] = pd.to_numeric(df['on_hand_qty'], errors='coerce').fillna(0)
+    
+    df['in_transit_qty'] = df['in_transit_qty'].astype(str).str.replace(',', '', regex=False)
+    df['in_transit_qty'] = pd.to_numeric(df['in_transit_qty'], errors='coerce').fillna(0)
+    
+    # --- FIX: Parse pricing columns, handling currency and price ---
+    df['last_purchase_price'] = df['last_purchase_price'].astype(str).str.replace(',', '', regex=False)
+    df['last_purchase_price'] = pd.to_numeric(df['last_purchase_price'], errors='coerce').fillna(0)
+    
+    df['currency'] = df['currency'].astype(str).str.strip().str.upper()
+    df['currency'] = df['currency'].fillna('USD')
 
     # --- NEW: Aggregate stock by SKU ---
     # The inventory file can have multiple rows for the same SKU (e.g., in different storage locations).
-    # We must sum these to get the total on-hand quantity for each SKU.
+    # We must sum quantities and take the first pricing info (prices should be the same per SKU).
     rows_before_agg = len(df)
-    df = df.groupby('sku', as_index=False)['on_hand_qty'].sum()
-    logs.append(f"INFO: Aggregated {rows_before_agg} rows into {len(df)} unique SKUs, summing on-hand stock.")
+    df = df.groupby('sku', as_index=False).agg({
+        'on_hand_qty': 'sum',
+        'in_transit_qty': 'sum',
+        'last_purchase_price': 'first',  # Take first price (should be same per SKU)
+        'currency': 'first'  # Take first currency (should be same per SKU)
+    })
+    logs.append(f"INFO: Aggregated {rows_before_agg} rows into {len(df)} unique SKUs, summing on-hand and in-transit stock.")
     
     end_time = time.time()
     total_time = end_time - start_time

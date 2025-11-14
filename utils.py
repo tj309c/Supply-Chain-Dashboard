@@ -278,56 +278,86 @@ def get_filtered_data_as_excel_with_metadata(dfs_to_export_dict, metadata_dict=N
 
 def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculate stock value in USD for inventory items.
+    Calculate stock value in USD for inventory items using data from INVENTORY.csv.
+    
+    Uses:
+    - on_hand_qty + in_transit_qty for total quantity
+    - last_purchase_price for unit price
+    - currency for currency conversion to USD
     
     Parameters:
-    - df: DataFrame with columns for price, currency, on-hand qty, and in-transit qty
+    - df: DataFrame with columns from inventory_analysis (includes pricing from INVENTORY.csv)
     
     Returns:
-    - DataFrame with added columns for stock value calculations
+    - DataFrame with added Stock Value USD column
+    
+    Notes:
+    - If pricing data is missing ($0 price) but stock > 0, this is flagged in debug logs
+    - Currency conversions: EUR (1.111), GBP (1.3), USD (1.0)
     """
     df = df.copy()
     
-    # Initialize required columns with defaults if they don't exist
-    if 'POP Actual Stock Qty' not in df.columns:
-        df['POP Actual Stock Qty'] = 0
-    if 'POP Actual Stock in Transit Qty' not in df.columns:
-        df['POP Actual Stock in Transit Qty'] = 0
-    if 'POP Last Purchase: Price in Purch. Currency' not in df.columns:
-        df['POP Last Purchase: Price in Purch. Currency'] = 0
-    if 'POP Last Purchase: Currency' not in df.columns:
-        df['POP Last Purchase: Currency'] = 'USD'
+    # DEBUG: Log what columns we actually have
+    print(f"[STOCK VALUE DEBUG] Available columns in inventory_analysis: {list(df.columns)}")
     
-    # Convert to numeric, handling any errors
-    df['POP Actual Stock Qty'] = pd.to_numeric(df['POP Actual Stock Qty'], errors='coerce').fillna(0)
-    df['POP Actual Stock in Transit Qty'] = pd.to_numeric(df['POP Actual Stock in Transit Qty'], errors='coerce').fillna(0)
-    df['POP Last Purchase: Price in Purch. Currency'] = pd.to_numeric(df['POP Last Purchase: Price in Purch. Currency'], errors='coerce').fillna(0)
+    # Initialize Stock Value USD with 0
+    df['Stock Value USD'] = 0.0
     
-    # Calculate total quantity
-    df['Total Stock Qty'] = df['POP Actual Stock Qty'] + df['POP Actual Stock in Transit Qty']
+    # Check if we have the required pricing columns
+    has_quantity_cols = ('on_hand_qty' in df.columns or 'on_hand_qty' in df.columns)
+    has_pricing_cols = ('last_purchase_price' in df.columns and 'currency' in df.columns)
     
-    # Convert price to USD based on currency
-    def convert_to_usd(row):
-        try:
-            price = float(row['POP Last Purchase: Price in Purch. Currency']) if pd.notna(row['POP Last Purchase: Price in Purch. Currency']) else 0
-            currency = str(row['POP Last Purchase: Currency']).upper().strip() if pd.notna(row['POP Last Purchase: Currency']) else 'USD'
+    print(f"[STOCK VALUE DEBUG] Has quantity cols: {has_quantity_cols}")
+    print(f"[STOCK VALUE DEBUG] Has pricing cols: {has_pricing_cols}")
+    
+    if has_pricing_cols:
+        # Convert pricing columns to numeric
+        df['last_purchase_price'] = pd.to_numeric(df['last_purchase_price'], errors='coerce').fillna(0)
+        df['currency'] = df['currency'].astype(str).str.strip().str.upper()
+        df['currency'] = df['currency'].fillna('USD')
+        
+        # Ensure total quantity column exists
+        if 'on_hand_qty' not in df.columns:
+            df['on_hand_qty'] = 0
+        if 'in_transit_qty' not in df.columns:
+            df['in_transit_qty'] = 0
             
-            # Handle various currency formats
-            if 'EUR' in currency:
-                return price * 1.111  # 1 EUR = 1.111 USD
-            elif 'GBP' in currency:
-                return price * 1.3    # 1 GBP = 1.3 USD
-            elif price > 0:
-                return price          # Assume USD or unknown
-            else:
+        df['on_hand_qty'] = pd.to_numeric(df['on_hand_qty'], errors='coerce').fillna(0)
+        df['in_transit_qty'] = pd.to_numeric(df['in_transit_qty'], errors='coerce').fillna(0)
+        
+        total_qty = df['on_hand_qty'] + df['in_transit_qty']
+        
+        # Convert price to USD based on currency
+        def convert_to_usd(row):
+            try:
+                price = float(row['last_purchase_price']) if pd.notna(row['last_purchase_price']) else 0
+                currency = str(row['currency']).upper().strip() if pd.notna(row['currency']) else 'USD'
+                
+                # Handle various currency formats
+                if 'EUR' in currency:
+                    return price * 1.111  # 1 EUR = 1.111 USD
+                elif 'GBP' in currency:
+                    return price * 1.3    # 1 GBP = 1.3 USD
+                elif price > 0:
+                    return price          # Assume USD or unknown
+                else:
+                    return 0
+            except:
                 return 0
-        except:
-            return 0
-    
-    df['Price USD per Unit'] = df.apply(convert_to_usd, axis=1)
-    
-    # Calculate stock value in USD
-    df['Stock Value USD'] = df['Total Stock Qty'] * df['Price USD per Unit']
+        
+        df['Price USD per Unit'] = df.apply(convert_to_usd, axis=1)
+        
+        # Calculate stock value in USD
+        df['Stock Value USD'] = total_qty * df['Price USD per Unit']
+        
+        # DEBUG: Flag items with stock but no price
+        items_with_stock_no_price = ((total_qty > 0) & (df['Price USD per Unit'] == 0)).sum()
+        if items_with_stock_no_price > 0:
+            print(f"[STOCK VALUE DEBUG] ⚠️ WARNING: {items_with_stock_no_price} items have stock but no pricing info")
+            
+    else:
+        print("[STOCK VALUE DEBUG] ⚠️ Pricing columns NOT FOUND in inventory_analysis")
+        print("[STOCK VALUE DEBUG] Stock Value USD will be $0 for all items - pricing data from INVENTORY.csv not loaded")
     
     return df
 

@@ -2379,14 +2379,49 @@ if report_view != "📈 Demand Forecasting":
 
         # Inventory Graphs
         st.subheader("Inventory Graphs")
-        for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", DEBUG_COLUMNS['inventory_data']):
-            st.write(issue)
+        try:
+            for issue in check_graph_df(inventory_analysis_data, "inventory_analysis_data", DEBUG_COLUMNS['inventory_data']):
+                st.write(issue)
+        except Exception as e:
+            st.error(f"❌ Error checking inventory_analysis_data: {str(e)[:100]}")
         
         # Cache inventory category data
-        if 'inventory_category_debug' not in st.session_state['cached_debug_aggregations']:
-            st.session_state['cached_debug_aggregations']['inventory_category_debug'] = get_inventory_category_data(inventory_analysis_data)
-        for issue in check_graph_df(st.session_state['cached_debug_aggregations']['inventory_category_debug'], "inventory_category_data", DEBUG_COLUMNS['inventory_category_data']):
-            st.write(issue)
+        try:
+            if 'inventory_category_debug' not in st.session_state['cached_debug_aggregations']:
+                st.session_state['cached_debug_aggregations']['inventory_category_debug'] = get_inventory_category_data(inventory_analysis_data)
+            inv_cat_debug = st.session_state['cached_debug_aggregations']['inventory_category_debug']
+            for issue in check_graph_df(inv_cat_debug, "inventory_category_data", DEBUG_COLUMNS['inventory_category_data']):
+                st.write(issue)
+        except Exception as e:
+            st.error(f"❌ Error generating inventory category data: {str(e)[:100]}")
+        
+        # Stock Value Calculation Debug
+        st.subheader("Stock Value Calculation Debug")
+        try:
+            if not inventory_analysis_data.empty:
+                st.write(f"✅ Inventory data loaded: {len(inventory_analysis_data)} rows")
+                st.write(f"✅ Inventory columns: {list(inventory_analysis_data.columns)}")
+                
+                # Check if Stock Value USD column exists
+                if 'Stock Value USD' in inventory_analysis_data.columns:
+                    stock_value_sum = inventory_analysis_data['Stock Value USD'].sum()
+                    stock_value_nonzero = (inventory_analysis_data['Stock Value USD'] > 0).sum()
+                    st.write(f"📊 Stock Value USD column present")
+                    st.write(f"   - Total Stock Value: ${stock_value_sum:,.2f}")
+                    st.write(f"   - Items with value > $0: {stock_value_nonzero} out of {len(inventory_analysis_data)}")
+                    
+                    if stock_value_nonzero == 0:
+                        st.warning("⚠️ All stock values are $0. This is expected if pricing data has not been integrated.")
+                        st.info("💡 **To fix $0 stock values:**")
+                        st.info("   1. Check if INVENTORY.csv contains pricing columns (e.g., 'Last Purchase Price', 'Unit Cost')")
+                        st.info("   2. Pricing data may need to be sourced from another CSV file and joined with inventory")
+                        st.info("   3. Contact your data team to provide pricing information for stock value calculation")
+                else:
+                    st.error("❌ Stock Value USD column not found in inventory data")
+            else:
+                st.error("❌ Inventory analysis data is empty")
+        except Exception as e:
+            st.error(f"❌ Error in stock value debug: {str(e)[:100]}")
 
         st.divider()
 
