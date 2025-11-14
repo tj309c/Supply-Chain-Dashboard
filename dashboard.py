@@ -1447,37 +1447,44 @@ else:
         filter_source_df = pd.DataFrame()
 
     # --- NEW: Generate filter options on-the-fly from the correct source (with caching - Perf #2) ---
+    # Year/Month filters only for Service Level and Backorder (not Demand Forecasting)
     all_years = []
     year_month_map = {}
     
-    # Check if we have a cached year-month map for this report
-    cached_map = st.session_state.get(f'cached_year_month_map_{report_view}', {})
-    if cached_map and not filter_source_df.empty and 'order_date' in filter_source_df.columns:
-        # Use cached map
-        year_month_map = cached_map
-        all_years = sorted(list(year_month_map.keys()), reverse=True)
-    elif not filter_source_df.empty and 'order_date' in filter_source_df.columns:
-        # Build and cache the year-month map
-        all_years = sorted(list(filter_source_df['order_date'].dt.year.dropna().astype(int).unique()), reverse=True)
-        date_df = filter_source_df[['order_date']].dropna().drop_duplicates()
-        date_df['year'] = date_df['order_date'].dt.year
-        date_df['month_name'] = date_df['order_date'].dt.month_name()
-        date_df['month_num'] = date_df['order_date'].dt.month
-        year_month_map = date_df.groupby('year')[['month_num', 'month_name']].apply(lambda x: x.drop_duplicates().sort_values('month_num')['month_name'].tolist()).to_dict()
-        # Cache it for next time
-        st.session_state[f'cached_year_month_map_{report_view}'] = year_month_map
+    if report_view != "📈 Demand Forecasting":
+        # Check if we have a cached year-month map for this report
+        cached_map = st.session_state.get(f'cached_year_month_map_{report_view}', {})
+        if cached_map and not filter_source_df.empty and 'order_date' in filter_source_df.columns:
+            # Use cached map
+            year_month_map = cached_map
+            all_years = sorted(list(year_month_map.keys()), reverse=True)
+        elif not filter_source_df.empty and 'order_date' in filter_source_df.columns:
+            # Build and cache the year-month map
+            all_years = sorted(list(filter_source_df['order_date'].dt.year.dropna().astype(int).unique()), reverse=True)
+            date_df = filter_source_df[['order_date']].dropna().drop_duplicates()
+            date_df['year'] = date_df['order_date'].dt.year
+            date_df['month_name'] = date_df['order_date'].dt.month_name()
+            date_df['month_num'] = date_df['order_date'].dt.month
+            year_month_map = date_df.groupby('year')[['month_num', 'month_name']].apply(lambda x: x.drop_duplicates().sort_values('month_num')['month_name'].tolist()).to_dict()
+            # Cache it for next time
+            st.session_state[f'cached_year_month_map_{report_view}'] = year_month_map
 
-    f_year = st.sidebar.selectbox("Select Order Year:", ["All"] + all_years, key="year")
+        f_year = st.sidebar.selectbox("Select Order Year:", ["All"] + all_years, key="year")
 
-    sorted_months = []
-    if f_year != "All" and f_year in year_month_map:
-        sorted_months = year_month_map[f_year]
+        sorted_months = []
+        if f_year != "All" and f_year in year_month_map:
+            sorted_months = year_month_map[f_year]
+        else:
+            all_months = set()
+            for months in year_month_map.values():
+                all_months.update(months)
+            sorted_months = sorted(list(all_months), key=lambda m: pd.to_datetime(m, format='%B').month)
+        f_month = st.sidebar.selectbox("Select Order Month:", ["All"] + list(sorted_months), key="month")
     else:
-        all_months = set()
-        for months in year_month_map.values():
-            all_months.update(months)
-        sorted_months = sorted(list(all_months), key=lambda m: pd.to_datetime(m, format='%B').month)
-    f_month = st.sidebar.selectbox("Select Order Month:", ["All"] + list(sorted_months), key="month")
+        # Demand Forecasting uses all historical data for better trend calculation
+        f_year = "All"
+        f_month = "All"
+        st.sidebar.info("📈 Demand Forecasting uses all historical data for accurate trend analysis. Filter by Customer, Category, or Product instead.")
 
     # --- Org #3: Use helper function for consistent multiselect widgets ---
     f_customer = create_multiselect_filter("Select Customer(s):", filter_source_df, 'customer_name', "customer")
