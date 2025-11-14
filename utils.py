@@ -288,14 +288,15 @@ def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # Ensure required columns exist
-    required_cols = ['POP Actual Stock Qty', 'POP Actual Stock in Transit Qty', 
-                     'POP Last Purchase: Price in Purch. Currency', 'POP Last Purchase: Currency']
-    
-    for col in required_cols:
-        if col not in df.columns:
-            # Try to find similar columns
-            df[col] = 0
+    # Initialize required columns with defaults if they don't exist
+    if 'POP Actual Stock Qty' not in df.columns:
+        df['POP Actual Stock Qty'] = 0
+    if 'POP Actual Stock in Transit Qty' not in df.columns:
+        df['POP Actual Stock in Transit Qty'] = 0
+    if 'POP Last Purchase: Price in Purch. Currency' not in df.columns:
+        df['POP Last Purchase: Price in Purch. Currency'] = 0
+    if 'POP Last Purchase: Currency' not in df.columns:
+        df['POP Last Purchase: Currency'] = 'USD'
     
     # Convert to numeric, handling any errors
     df['POP Actual Stock Qty'] = pd.to_numeric(df['POP Actual Stock Qty'], errors='coerce').fillna(0)
@@ -309,14 +310,17 @@ def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
     def convert_to_usd(row):
         try:
             price = float(row['POP Last Purchase: Price in Purch. Currency']) if pd.notna(row['POP Last Purchase: Price in Purch. Currency']) else 0
-            currency = str(row['POP Last Purchase: Currency']).upper() if pd.notna(row['POP Last Purchase: Currency']) else 'USD'
+            currency = str(row['POP Last Purchase: Currency']).upper().strip() if pd.notna(row['POP Last Purchase: Currency']) else 'USD'
             
-            if currency == 'EUR':
+            # Handle various currency formats
+            if 'EUR' in currency:
                 return price * 1.111  # 1 EUR = 1.111 USD
-            elif currency == 'GBP':
+            elif 'GBP' in currency:
                 return price * 1.3    # 1 GBP = 1.3 USD
+            elif price > 0:
+                return price          # Assume USD or unknown
             else:
-                return price          # Assume USD
+                return 0
         except:
             return 0
     
@@ -326,3 +330,5 @@ def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
     df['Stock Value USD'] = df['Total Stock Qty'] * df['Price USD per Unit']
     
     return df
+
+

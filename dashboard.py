@@ -1394,7 +1394,7 @@ def show_empty_state_message(report_name: str, filter_count: int = 0) -> None:
 st.sidebar.header("Filters")
 
 # --- GROUP 4B: Clear All Filters button with tooltip ---
-if st.sidebar.button("🔄 Reset All Filters", use_container_width=True, help="Clear all filter selections and return to full dataset"):
+if st.sidebar.button("🔄 Reset All Filters", width='stretch', help="Clear all filter selections and return to full dataset"):
     st.session_state[f'active_filters_{report_view}'] = {}
     st.rerun()
 
@@ -1414,8 +1414,7 @@ st.sidebar.divider()
 
 if report_view == "Inventory Management":
     # --- Inventory-specific filters: Material attributes and Category attributes ---
-    st.sidebar.info("📦 Filter inventory by item and category attributes. Ordered by: Material → Category → Alphabetical")
-    f_inventory = inventory_analysis_data
+    f_inventory = inventory_analysis_data.copy() if not inventory_analysis_data.empty else pd.DataFrame()
     
     # Set other filtered dataframes to their unfiltered state so the app doesn't break
     f_service = service_data
@@ -1429,20 +1428,34 @@ if report_view == "Inventory Management":
     f_order_type = []
     f_order_reason = []
     
-    # --- Material Attribute Filters (ordered by material attributes first) ---
-    f_material = create_multiselect_filter("Material Number:", inventory_analysis_data, 'Material Number', "inv_mat_num")
-    f_material_desc = create_multiselect_filter("Material Description:", inventory_analysis_data, 'Material Description', "inv_mat_desc")
-    f_pop_material = create_multiselect_filter("POP Material (POP/Non-POP):", inventory_analysis_data, 'POP Material: POP/Non POP', "inv_pop_material")
-    f_plm_level2 = create_multiselect_filter("PLM Level 2 (Wholesale/Retail):", inventory_analysis_data, 'PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)', "inv_plm_l2")
-    f_expiration = create_multiselect_filter("Expiration Flag:", inventory_analysis_data, 'POP Calculated Attributes: Expiration Flag', "inv_exp_flag")
-    f_vendor = create_multiselect_filter("Vendor Name:", inventory_analysis_data, 'POP Last Purchase: Vendor Name', "inv_vendor")
-    
-    # --- Category Attribute Filters (ordered after material) ---
-    f_category = create_multiselect_filter("Category:", inventory_analysis_data, 'category', "inv_category")
-    f_stock_category = create_multiselect_filter("Stock Category Description:", inventory_analysis_data, 'Stock Category: Description', "inv_stock_cat")
+    # Check if inventory data is available before showing filters
+    if f_inventory.empty:
+        st.sidebar.error("❌ No inventory data available. Check that INVENTORY.csv is loaded correctly.")
+        # Create empty filter results to prevent crashes
+        f_material = []
+        f_material_desc = []
+        f_pop_material = []
+        f_plm_level2 = []
+        f_expiration = []
+        f_vendor = []
+        f_category = []
+        f_stock_category = []
+    else:
+        st.sidebar.info("📦 Filter inventory by item and category attributes")
+        # --- Material Attribute Filters (ordered by material attributes first) ---
+        f_material = create_multiselect_filter("Material Number:", f_inventory, 'Material Number', "inv_mat_num")
+        f_material_desc = create_multiselect_filter("Material Description:", f_inventory, 'Material Description', "inv_mat_desc")
+        f_pop_material = create_multiselect_filter("POP Material (POP/Non-POP):", f_inventory, 'POP Material: POP/Non POP', "inv_pop_material")
+        f_plm_level2 = create_multiselect_filter("PLM Level 2 (Wholesale/Retail):", f_inventory, 'PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)', "inv_plm_l2")
+        f_expiration = create_multiselect_filter("Expiration Flag:", f_inventory, 'POP Calculated Attributes: Expiration Flag', "inv_exp_flag")
+        f_vendor = create_multiselect_filter("Vendor Name:", f_inventory, 'POP Last Purchase: Vendor Name', "inv_vendor")
+        
+        # --- Category Attribute Filters (ordered after material) ---
+        f_category = create_multiselect_filter("Category:", f_inventory, 'category', "inv_category")
+        f_stock_category = create_multiselect_filter("Stock Category Description:", f_inventory, 'Stock Category: Description', "inv_stock_cat")
     
     # Apply inventory-specific filters
-    if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
+    if st.sidebar.button("Apply Filters", width='stretch', type="primary"):
         filter_dict = {
             'order_year': "All",
             'order_month': "All",
@@ -1542,7 +1555,7 @@ else:
     if report_view == "Backorder Report":
         f_order_reason = st.sidebar.multiselect("Select Order Reason(s):", get_unique_values(filter_source_df, 'order_reason'), key="order_reason")
 
-    if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
+    if st.sidebar.button("Apply Filters", width='stretch', type="primary"):
         # Store BOTH the applied filters (for comparison) AND widget values (for current state)
         # applied_filters = last saved state (what is currently rendered)
         # active_filters = widget values saved for lazy loading comparison
@@ -1807,7 +1820,7 @@ if report_view == "📈 Demand Forecasting":
                                 fig.update_layout(height=CHART_HEIGHT_LARGE, hovermode='x unified', margin=CHART_MARGIN)
                                 fig.update_xaxes(title_text="Date")
                                 fig.update_yaxes(title_text="Daily Demand (Units)")
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width='stretch')
                                 
                                 # Show forecast summary with volatility
                                 st.subheader("Forecast Summary")
@@ -1949,7 +1962,7 @@ if report_view == "Service Level":
                             fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
                             fig.update_yaxes(title_text="Units Issued", secondary_y=False)
                             fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                 except KeyError as e:
                     st.error(f"❌ Missing data column in customer analysis: {str(e)[:50]}")
                 except Exception as e:
@@ -1960,7 +1973,7 @@ if report_view == "Service Level":
                         'total_units': FORMATS['currency'], 
                         'on_time_pct': FORMATS['percentage'], 
                         'avg_days': FORMATS['decimal_1']
-                    }), use_container_width=True)
+                    }), width='stretch')
 
             with col2:
                 st.subheader(f"Monthly Units & {kpi_name}")
@@ -1982,7 +1995,7 @@ if report_view == "Service Level":
                             fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
                             fig.update_yaxes(title_text="Units Issued", secondary_y=False)
                             fig.update_yaxes(title_text=kpi_name, secondary_y=True, range=y_range)
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                 except KeyError as e:
                     st.error(f"❌ Missing data column in monthly analysis: {str(e)[:50]}")
                 except Exception as e:
@@ -1993,7 +2006,7 @@ if report_view == "Service Level":
                         'total_units': FORMATS['currency'], 
                         'on_time_pct': FORMATS['percentage'], 
                         'avg_days': FORMATS['decimal_1']
-                    }), use_container_width=True, hide_index=True)
+                    }), width='stretch', hide_index=True)
 
 elif report_view == "Backorder Report":
     # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
@@ -2065,7 +2078,7 @@ elif report_view == "Backorder Report":
                             fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN)
                             fig.update_yaxes(title_text="Backorder Qty", secondary_y=False)
                             fig.update_yaxes(title_text="Avg. Days on BO", secondary_y=True)
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                 except KeyError as e:
                     st.error(f"❌ Missing data column in backorder customer analysis: {str(e)[:50]}")
                 except Exception as e:
@@ -2075,7 +2088,7 @@ elif report_view == "Backorder Report":
                     st.dataframe(cust_bo.style.format({
                         'total_bo_qty': FORMATS['currency'], 
                         'avg_days_on_bo': FORMATS['decimal_1']
-                    }), use_container_width=True)
+                    }), width='stretch')
 
             with col2: # --- NEW: Add a chart for the item data ---
                 st.subheader("Backorder Qty by Item (Top 10)")
@@ -2093,7 +2106,7 @@ elif report_view == "Backorder Report":
                         else:
                             fig = go.Figure(go.Bar(x=item_bo_chart['product_name'], y=item_bo_chart['total_bo_qty']))
                             fig.update_layout(height=CHART_HEIGHT_SMALL, margin=CHART_MARGIN, yaxis_title="Backorder Qty")
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                 except KeyError as e:
                     st.error(f"❌ Missing data column in backorder item analysis: {str(e)[:50]}")
                 except Exception as e:
@@ -2103,45 +2116,50 @@ elif report_view == "Backorder Report":
                     st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({
                         'total_bo_qty': FORMATS['currency'], 
                         'avg_days_on_bo': FORMATS['decimal_1']
-                    }), use_container_width=True)
+                    }), width='stretch')
 
 elif report_view == "Inventory Management":
     # --- Apply inventory-specific filters (all material + category attributes) ---
     from utils import calculate_inventory_stock_value
     
-    f_inventory = inventory_analysis_data.copy()
+    f_inventory = inventory_analysis_data.copy() if not inventory_analysis_data.empty else pd.DataFrame()
     
-    # Get applied filters
-    applied_filters = st.session_state.get(f'applied_filters_{report_view}', {})
-    
-    # Apply material attribute filters
-    if applied_filters.get('material_number'):
-        f_inventory = f_inventory[f_inventory['Material Number'].isin(applied_filters['material_number'])]
-    
-    if applied_filters.get('material_description'):
-        f_inventory = f_inventory[f_inventory['Material Description'].isin(applied_filters['material_description'])]
-    
-    if applied_filters.get('pop_material'):
-        f_inventory = f_inventory[f_inventory['POP Material: POP/Non POP'].isin(applied_filters['pop_material'])]
-    
-    if applied_filters.get('plm_level2'):
-        f_inventory = f_inventory[f_inventory['PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)'].isin(applied_filters['plm_level2'])]
-    
-    if applied_filters.get('expiration_flag'):
-        f_inventory = f_inventory[f_inventory['POP Calculated Attributes: Expiration Flag'].isin(applied_filters['expiration_flag'])]
-    
-    if applied_filters.get('vendor_name'):
-        f_inventory = f_inventory[f_inventory['POP Last Purchase: Vendor Name'].isin(applied_filters['vendor_name'])]
-    
-    # Apply category attribute filters
-    if applied_filters.get('category'):
-        f_inventory = f_inventory[f_inventory['category'].isin(applied_filters['category'])]
-    
-    if applied_filters.get('stock_category'):
-        f_inventory = f_inventory[f_inventory['Stock Category: Description'].isin(applied_filters['stock_category'])]
-    
-    # Calculate stock values
-    f_inventory = calculate_inventory_stock_value(f_inventory)
+    try:
+        # Get applied filters
+        applied_filters = st.session_state.get(f'applied_filters_{report_view}', {})
+        
+        # Apply material attribute filters with error handling
+        if applied_filters.get('material_number') and 'Material Number' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['Material Number'].isin(applied_filters['material_number'])]
+        
+        if applied_filters.get('material_description') and 'Material Description' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['Material Description'].isin(applied_filters['material_description'])]
+        
+        if applied_filters.get('pop_material') and 'POP Material: POP/Non POP' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['POP Material: POP/Non POP'].isin(applied_filters['pop_material'])]
+        
+        if applied_filters.get('plm_level2') and 'PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['PLM: Level Classification 2 (Attribute D_TMKLVL2CLS)'].isin(applied_filters['plm_level2'])]
+        
+        if applied_filters.get('expiration_flag') and 'POP Calculated Attributes: Expiration Flag' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['POP Calculated Attributes: Expiration Flag'].isin(applied_filters['expiration_flag'])]
+        
+        if applied_filters.get('vendor_name') and 'POP Last Purchase: Vendor Name' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['POP Last Purchase: Vendor Name'].isin(applied_filters['vendor_name'])]
+        
+        # Apply category attribute filters
+        if applied_filters.get('category') and 'category' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['category'].isin(applied_filters['category'])]
+        
+        if applied_filters.get('stock_category') and 'Stock Category: Description' in f_inventory.columns:
+            f_inventory = f_inventory[f_inventory['Stock Category: Description'].isin(applied_filters['stock_category'])]
+        
+        # Calculate stock values
+        f_inventory = calculate_inventory_stock_value(f_inventory)
+        
+    except Exception as e:
+        st.error(f"❌ Error applying inventory filters: {str(e)[:100]}")
+        f_inventory = pd.DataFrame()
     
     # --- Set other dataframes to their unfiltered state ---
     f_service = service_data
@@ -2233,7 +2251,7 @@ elif report_view == "Inventory Management":
                         fig.update_layout(height=CHART_HEIGHT_LARGE, margin=CHART_MARGIN)
                         fig.update_yaxes(title_text="On-Hand Stock (Units)", secondary_y=False)
                         fig.update_yaxes(title_text="Avg. Days of Inventory (DIO)", secondary_y=True)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
             except KeyError as e:
                 st.error(f"❌ Missing data column in inventory analysis: {str(e)[:50]}")
             except Exception as e:
@@ -2243,7 +2261,7 @@ elif report_view == "Inventory Management":
                 st.dataframe(inv_by_cat.style.format({
                     'total_on_hand': FORMATS['currency'], 
                     'avg_dio': FORMATS['decimal_1']
-                }), use_container_width=True)
+                }), width='stretch')
             
             # --- Detailed Inventory Table with Stock Value ---
             st.divider()
@@ -2270,7 +2288,7 @@ elif report_view == "Inventory Management":
                 elif 'stock value' in col_lower or 'price' in col_lower:
                     format_dict[col] = '${:,.2f}'  # Format as currency
             
-            st.dataframe(inventory_display.style.format(format_dict), use_container_width=True)
+            st.dataframe(inventory_display.style.format(format_dict), width='stretch')
 
 
 # --- Tab 6: Debug Log (Only for standard reports, not Demand Forecasting) ---
