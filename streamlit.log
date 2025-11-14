@@ -1,11 +1,24 @@
-nohup: ignoring input
 
 Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
 
+2025-11-14 00:17:41.257 No singleton. Registering one.
+2025-11-14 00:17:41.258 Watcher created for /workspaces/Supply-Chain-Dashboard/.streamlit/config.toml
+2025-11-14 00:17:41.462 Filtered 40 packages down to 1 candidates for component scanning
+2025-11-14 00:17:41.463 Scanning 1 candidate packages for component manifests using 1 worker threads
+2025-11-14 00:17:41.507 Found 0 component manifests total
+2025-11-14 00:17:41.507 No asset roots to watch
+2025-11-14 00:17:41.508 File watching not started
+2025-11-14 00:17:41.508 Starting new event loop for server
+2025-11-14 00:17:41.508 Starting server...
+2025-11-14 00:17:41.509 Serving static content from /workspaces/Supply-Chain-Dashboard/.venv/lib/python3.12/site-packages/streamlit/static
+2025-11-14 00:17:41.511 Port 8501 already in use, trying to use the next one.
+2025-11-14 00:17:41.513 Server started on port 8502
+2025-11-14 00:17:41.513 Runtime state: RuntimeState.INITIAL -> RuntimeState.NO_SESSIONS_CONNECTED
 
   You can now view your Streamlit app in your browser.
 
-  Local URL: http://localhost:8501
-  Network URL: http://10.0.0.219:8501
-  External URL: http://172.203.190.65:8501
+  Local URL: http://localhost:8502
+  Network URL: http://10.0.0.169:8502
+  External URL: http://172.210.53.224:8502
 
+2025-11-14 00:17:41.571 Setting up signal handler

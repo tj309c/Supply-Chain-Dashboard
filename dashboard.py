@@ -1420,6 +1420,16 @@ if report_view == "Inventory Management":
     # Set other filtered dataframes to their unfiltered state so the app doesn't break
     f_service = service_data
     f_backorder = backorder_data
+    
+    # Initialize filter variables as empty for Inventory (not used but needed for later code)
+    f_year = "All"
+    f_month = "All"
+    f_customer = []
+    f_material = []
+    f_category = []
+    f_sales_org = []
+    f_order_type = []
+    f_order_reason = []
 
 else:
     # --- Global Filters for Service and Backorder Reports ---
@@ -2274,7 +2284,8 @@ if 'dfs_to_export' in locals() and dfs_to_export:
     try:
         # Build metadata if requested
         metadata = None
-        if export_with_metadata and 'active_filters' in locals():
+        if export_with_metadata:
+            active_filters = st.session_state.get(f'applied_filters_{report_view}', {})
             metadata = {
                 'Report': report_view,
                 'Export Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
