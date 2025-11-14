@@ -274,3 +274,55 @@ def get_filtered_data_as_excel_with_metadata(dfs_to_export_dict, metadata_dict=N
     
     processed_data = output.getvalue()
     return processed_data
+
+
+def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate stock value in USD for inventory items.
+    
+    Parameters:
+    - df: DataFrame with columns for price, currency, on-hand qty, and in-transit qty
+    
+    Returns:
+    - DataFrame with added columns for stock value calculations
+    """
+    df = df.copy()
+    
+    # Ensure required columns exist
+    required_cols = ['POP Actual Stock Qty', 'POP Actual Stock in Transit Qty', 
+                     'POP Last Purchase: Price in Purch. Currency', 'POP Last Purchase: Currency']
+    
+    for col in required_cols:
+        if col not in df.columns:
+            # Try to find similar columns
+            df[col] = 0
+    
+    # Convert to numeric, handling any errors
+    df['POP Actual Stock Qty'] = pd.to_numeric(df['POP Actual Stock Qty'], errors='coerce').fillna(0)
+    df['POP Actual Stock in Transit Qty'] = pd.to_numeric(df['POP Actual Stock in Transit Qty'], errors='coerce').fillna(0)
+    df['POP Last Purchase: Price in Purch. Currency'] = pd.to_numeric(df['POP Last Purchase: Price in Purch. Currency'], errors='coerce').fillna(0)
+    
+    # Calculate total quantity
+    df['Total Stock Qty'] = df['POP Actual Stock Qty'] + df['POP Actual Stock in Transit Qty']
+    
+    # Convert price to USD based on currency
+    def convert_to_usd(row):
+        try:
+            price = float(row['POP Last Purchase: Price in Purch. Currency']) if pd.notna(row['POP Last Purchase: Price in Purch. Currency']) else 0
+            currency = str(row['POP Last Purchase: Currency']).upper() if pd.notna(row['POP Last Purchase: Currency']) else 'USD'
+            
+            if currency == 'EUR':
+                return price * 1.111  # 1 EUR = 1.111 USD
+            elif currency == 'GBP':
+                return price * 1.3    # 1 GBP = 1.3 USD
+            else:
+                return price          # Assume USD
+        except:
+            return 0
+    
+    df['Price USD per Unit'] = df.apply(convert_to_usd, axis=1)
+    
+    # Calculate stock value in USD
+    df['Stock Value USD'] = df['Total Stock Qty'] * df['Price USD per Unit']
+    
+    return df
