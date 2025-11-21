@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(streamlit run:*)",
+      "Bash(python business_rules.py:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

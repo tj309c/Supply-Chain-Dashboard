@@ -97,7 +97,7 @@ def mock_read_csv(monkeypatch, mock_master_data_csv, mock_orders_csv, mock_deliv
 
 def test_load_master_data():
     """Tests that master data loads, renames columns, and handles duplicates."""
-    logs, df, errors, _ = load_master_data("master_data.csv")
+    logs, df, errors = load_master_data("master_data.csv")
     
     assert "WARNING: Found duplicated SKUs" in " ".join(logs)
     assert len(df) == 3 # Should drop the duplicate SKU '101'
@@ -109,7 +109,7 @@ def test_load_orders_item_lookup_aggregation_and_dates():
     Tests that orders are correctly aggregated and that the two-pass
     date parsing works for both M/D/YY and YYYY-MM-DD formats.
     """
-    logs, df, errors, _ = load_orders_item_lookup("orders.csv")
+    logs, df, errors = load_orders_item_lookup("orders.csv")
 
     # Check that the bad date was caught and dropped
     assert "ERROR: 1 order dates failed to parse" in " ".join(logs)
@@ -142,10 +142,10 @@ def test_load_service_data_joins_and_calcs():
     Tests that service data correctly joins with header data and that
     calculations like `days_to_deliver` are correct.
     """
-    _, master_df, _, _ = load_master_data("master_data.csv")
+    _, master_df, _ = load_master_data("master_data.csv")
     _, header_df = load_orders_header_lookup("orders.csv")
 
-    logs, df, errors, _ = load_service_data("deliveries.csv", header_df, master_df)
+    logs, df, errors = load_service_data("deliveries.csv", header_df, master_df)
 
     # Check that the unmatched delivery (SO-999) was dropped
     assert "WARNING: 1 delivery lines did not find a matching order" in " ".join(logs)
@@ -168,11 +168,11 @@ def test_load_backorder_data_columns():
     Tests that the backorder data loader correctly includes all columns
     needed for filtering in the dashboard and handles aggregation.
     """
-    _, master_df, _, _ = load_master_data("master_data.csv")
-    _, item_lookup_df, _, _ = load_orders_item_lookup("orders.csv")
+    _, master_df, _ = load_master_data("master_data.csv")
+    _, item_lookup_df, _ = load_orders_item_lookup("orders.csv")
     _, header_df = load_orders_header_lookup("orders.csv")
-    
-    logs, df, errors, _ = load_backorder_data(item_lookup_df, header_df, master_df)
+
+    logs, df, errors = load_backorder_data(item_lookup_df, header_df, master_df)
 
     # SO-001 has backorder_qty > 0 (5 units)
     # SO-004 has backorder_qty > 0 (5 units) but SKU 999 is not in master data, so it should be dropped.
@@ -200,14 +200,14 @@ def test_load_service_data_sku_mismatch():
     Tests that the backorder data loader correctly includes all columns
     needed for filtering in the dashboard.
     """
-    _, master_df, _, _ = load_master_data("master_data.csv")
-    _, item_lookup_df, _, _ = load_orders_item_lookup("orders.csv")
+    _, master_df, _ = load_master_data("master_data.csv")
+    _, item_lookup_df, _ = load_orders_item_lookup("orders.csv")
     _, header_df = load_orders_header_lookup("orders.csv")
 
     # Mock deliveries with an SKU not in master data (SO-999, SKU 999)
     # The mock_deliveries_csv fixture already has SO-999, SKU 999
-    
-    logs, df, errors, _ = load_service_data("deliveries.csv", header_df, master_df)
+
+    logs, df, errors = load_service_data("deliveries.csv", header_df, master_df)
 
     # SO-001, SKU 101 should be present. SO-999, SKU 999 should be dropped.
     assert len(df) == 1
@@ -233,6 +233,6 @@ def test_load_master_data_missing_column():
     # Override the mock for this one test
     with pytest.MonkeyPatch.context() as m:
         m.setattr(pd, "read_csv", lambda *args, **kwargs: pd.read_csv(io.StringIO(bad_csv)))
-        logs, df, _, _ = load_master_data("master_data.csv")
+        logs, df, _ = load_master_data("master_data.csv")
         assert "ERROR: 'Master Data.csv' is missing required columns: Material Number" in " ".join(logs)
         assert df.empty
