@@ -250,9 +250,9 @@ def render_overview_page(service_data, backorder_data, inventory_data):
         else:
             render_info_box("No backorder data available", type="info")
 
-    # Alerts section
+    # Alerts and Details section
     st.divider()
-    st.subheader("🔔 Active Alerts")
+    st.subheader("🔔 Active Alerts & Key Issues")
 
     alerts = []
 
@@ -268,8 +268,66 @@ def render_overview_page(service_data, backorder_data, inventory_data):
         if old_backorders > 0:
             alerts.append(("warning", f"{old_backorders} backorders aged over 30 days"))
 
+    # Check critical stock
+    if not inventory_data.empty:
+        if 'stock_out_risk' in inventory_data.columns:
+            critical_skus = len(inventory_data[inventory_data['stock_out_risk'] == 'Critical'])
+        elif 'dio' in inventory_data.columns:
+            critical_skus = len(inventory_data[inventory_data['dio'] < 30])
+        else:
+            critical_skus = 0
+
+        if critical_skus > 0:
+            alerts.append(("error", f"{critical_skus} SKUs at critical stock-out risk (DIO < 30 days)"))
+
     if not alerts:
         st.success("✓ All metrics within normal range")
     else:
         for alert_type, message in alerts:
             render_info_box(message, type=alert_type)
+
+    # Details sections
+    st.divider()
+
+    # Top Backorder Customers
+    if not backorder_data.empty and 'customer_name' in backorder_data.columns and 'backorder_qty' in backorder_data.columns:
+        with st.expander("📋 Top 10 Backorder Customers", expanded=False):
+            customer_backorders = backorder_data.groupby('customer_name')['backorder_qty'].agg(['sum', 'count']).reset_index()
+            customer_backorders.columns = ['Customer', 'Total Units', 'Order Lines']
+            customer_backorders = customer_backorders.sort_values('Total Units', ascending=False).head(10)
+
+            st.dataframe(
+                customer_backorders,
+                hide_index=True,
+                use_container_width=True
+            )
+
+    # Critical Stock SKUs
+    if not inventory_data.empty and critical_skus > 0:
+        with st.expander(f"⚠️ Critical Stock SKUs ({critical_skus} items)", expanded=False):
+            if 'stock_out_risk' in inventory_data.columns:
+                critical_items = inventory_data[inventory_data['stock_out_risk'] == 'Critical']
+            elif 'dio' in inventory_data.columns:
+                critical_items = inventory_data[inventory_data['dio'] < 30]
+            else:
+                critical_items = pd.DataFrame()
+
+            if not critical_items.empty:
+                display_cols = []
+                if 'sku' in critical_items.columns:
+                    display_cols.append('sku')
+                if 'category' in critical_items.columns:
+                    display_cols.append('category')
+                if 'on_hand_qty' in critical_items.columns:
+                    display_cols.append('on_hand_qty')
+                if 'dio' in critical_items.columns:
+                    display_cols.append('dio')
+
+                if display_cols:
+                    critical_display = critical_items[display_cols].head(20).copy()
+                    critical_display.columns = [col.replace('_', ' ').title() for col in critical_display.columns]
+                    st.dataframe(
+                        critical_display,
+                        hide_index=True,
+                        use_container_width=True
+                    )
