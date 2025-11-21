@@ -1409,7 +1409,7 @@ def show_empty_state_message(report_name: str, filter_count: int = 0) -> None:
 st.sidebar.header("Filters")
 
 # --- GROUP 4B: Clear All Filters button with tooltip ---
-if st.sidebar.button("🔄 Reset All Filters", width='stretch', help="Clear all filter selections and return to full dataset"):
+if st.sidebar.button("🔄 Reset All Filters", use_container_width=True, help="Clear all filter selections and return to full dataset"):
     st.session_state[f'active_filters_{report_view}'] = {}
     st.rerun()
 
@@ -1473,7 +1473,7 @@ if report_view == "Inventory Management":
         f_stock_category = []
     
     # Apply inventory-specific filters
-    if st.sidebar.button("Apply Filters", width='stretch', type="primary"):
+    if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
         filter_dict = {
             'order_year': "All",
             'order_month': "All",
@@ -1584,7 +1584,7 @@ else:
         f_order_type = []
         st.sidebar.warning("⚠️ No data available for filter options.")
 
-    if st.sidebar.button("Apply Filters", width='stretch', type="primary"):
+    if st.sidebar.button("Apply Filters", use_container_width=True, type="primary"):
         # Store BOTH the applied filters (for comparison) AND widget values (for current state)
         # applied_filters = last saved state (what is currently rendered)
         # active_filters = widget values saved for lazy loading comparison
@@ -2011,7 +2011,7 @@ if report_view == "Service Level":
                         'total_units': FORMATS['currency'], 
                         'on_time_pct': FORMATS['percentage'], 
                         'avg_days': FORMATS['decimal_1']
-                    }), width='stretch')
+                    }), use_container_width=True)
 
             with col2:
                 st.subheader(f"Monthly Units & {kpi_name}")
@@ -2044,7 +2044,7 @@ if report_view == "Service Level":
                         'total_units': FORMATS['currency'], 
                         'on_time_pct': FORMATS['percentage'], 
                         'avg_days': FORMATS['decimal_1']
-                    }), width='stretch', hide_index=True)
+                    }), use_container_width=True, hide_index=True)
 
 elif report_view == "Backorder Report":
     # --- LAZY FILTER LOADING: Apply filters only when "Apply Filters" is clicked ---
@@ -2126,7 +2126,7 @@ elif report_view == "Backorder Report":
                     st.dataframe(cust_bo.style.format({
                         'total_bo_qty': FORMATS['currency'], 
                         'avg_days_on_bo': FORMATS['decimal_1']
-                    }), width='stretch')
+                    }), use_container_width=True)
 
             with col2: # --- NEW: Add a chart for the item data ---
                 st.subheader("Backorder Qty by Item (Top 10)")
@@ -2154,7 +2154,7 @@ elif report_view == "Backorder Report":
                     st.dataframe(item_bo_chart.set_index(['sku', 'product_name']).style.format({
                         'total_bo_qty': FORMATS['currency'], 
                         'avg_days_on_bo': FORMATS['decimal_1']
-                    }), width='stretch')
+                    }), use_container_width=True)
 
 elif report_view == "Inventory Management":
     # --- Apply inventory-specific filters (all material + category attributes) ---
@@ -2288,7 +2288,7 @@ elif report_view == "Inventory Management":
                 st.dataframe(inv_by_cat.style.format({
                     'total_on_hand': FORMATS['currency'], 
                     'avg_dio': FORMATS['decimal_1']
-                }), width='stretch')
+                }), use_container_width=True)
             
             # --- Detailed Inventory Table with Stock Value ---
             st.divider()
@@ -2312,7 +2312,7 @@ elif report_view == "Inventory Management":
                 elif 'dio' in col_lower:
                     format_dict[col] = '{:.2f}'  # 2 decimals for DIO
             
-            st.dataframe(inventory_display.style.format(format_dict), width='stretch')
+            st.dataframe(inventory_display.style.format(format_dict), use_container_width=True)
 
 
 # --- Tab 6: Debug Log (Only for standard reports, not Demand Forecasting) ---
