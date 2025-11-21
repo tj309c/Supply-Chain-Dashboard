@@ -130,14 +130,13 @@ def render_inventory_settings_sidebar():
         "Select dataset:",
         options=[
             "All Inventory Data",
-            "Scrap Candidates",
+            "Warehouse Scrap List",
             "Stock-Out Risks",
             "Slow-Moving Items (Top 50)",
             "ABC Class A Items",
             "ABC Class B Items",
             "ABC Class C Items",
-            "Dead Stock Items",
-            "Warehouse Scrap List (All SKUs)"
+            "Dead Stock Items"
         ],
         key="export_section",
         help="Choose which data to export to Excel"
@@ -145,7 +144,7 @@ def render_inventory_settings_sidebar():
 
     # Scrap threshold slider (only shown for Warehouse Scrap List)
     scrap_days_threshold = 730  # Default to 2 years
-    if export_section == "Warehouse Scrap List (All SKUs)":
+    if export_section == "Warehouse Scrap List":
         scrap_days_threshold = st.sidebar.slider(
             "Scrap Threshold (Days of Supply)",
             min_value=365,
@@ -363,8 +362,8 @@ def prepare_export_data(inventory_data, section, currency, scrap_threshold, scra
     if section == "All Inventory Data":
         return inventory_data
 
-    elif section == "Scrap Candidates":
-        return inventory_data[inventory_data['dio'] >= scrap_threshold].sort_values(value_col, ascending=False)
+    elif section == "Warehouse Scrap List":
+        return prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
 
     elif section == "Stock-Out Risks":
         return inventory_data[inventory_data['stock_out_risk'] == 'Critical'].sort_values('dio')
@@ -386,9 +385,6 @@ def prepare_export_data(inventory_data, section, currency, scrap_threshold, scra
 
     elif section == "Dead Stock Items":
         return inventory_data[inventory_data['movement_class'] == 'Dead Stock'].sort_values(value_col, ascending=False)
-
-    elif section == "Warehouse Scrap List (All SKUs)":
-        return prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
 
     return inventory_data
 

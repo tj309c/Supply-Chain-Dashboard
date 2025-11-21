@@ -10,7 +10,8 @@ from plotly.subplots import make_subplots
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ui_components import render_page_header, render_kpi_row, render_chart, render_info_box
+from ui_components import render_page_header, render_kpi_row, render_chart, render_info_box, render_data_table
+from business_rules import CURRENCY_CONVERSION
 
 def calculate_overview_metrics(service_data, backorder_data, inventory_data):
     """Calculate high-level metrics for overview page"""
@@ -61,13 +62,55 @@ def calculate_overview_metrics(service_data, backorder_data, inventory_data):
     if not inventory_data.empty:
         total_stock = inventory_data['on_hand_qty'].sum() if 'on_hand_qty' in inventory_data.columns else 0
 
+        # Calculate inventory value in USD
+        if 'total_value_usd' in inventory_data.columns:
+            total_value_usd = inventory_data['total_value_usd'].sum()
+        elif 'total_value' in inventory_data.columns:
+            total_value_usd = inventory_data['total_value'].sum() * CURRENCY_CONVERSION['EUR_TO_USD']
+        else:
+            total_value_usd = 0
+
+        # Calculate average DIO if available
+        avg_dio = inventory_data['dio'].mean() if 'dio' in inventory_data.columns else None
+
+        # Count critical stock situations
+        critical_stock = 0
+        if 'stock_risk' in inventory_data.columns:
+            critical_stock = len(inventory_data[inventory_data['stock_risk'] == 'Critical'])
+        elif 'dio' in inventory_data.columns:
+            critical_stock = len(inventory_data[inventory_data['dio'] < 30])
+
         metrics['inventory_units'] = {
             "value": f"{int(total_stock):,}",
             "delta": None,
             "help": f"**Business Logic:** Total units currently on-hand across all SKUs in all warehouse locations. Current: {int(total_stock):,} units. Formula: SUM(on_hand_qty)"
         }
+
+        metrics['inventory_value'] = {
+            "value": f"${total_value_usd:,.0f}",
+            "delta": None,
+            "help": f"**Business Logic:** Total inventory value in USD. Calculated as: SUM(on_hand_qty × last_purchase_price × EUR_to_USD_rate). Current: ${total_value_usd:,.0f}"
+        }
+
+        if avg_dio is not None:
+            metrics['avg_dio'] = {
+                "value": f"{avg_dio:.0f} days",
+                "delta": None,
+                "help": f"**Business Logic:** Average Days Inventory Outstanding across all SKUs. Target: 60-90 days. Current: {avg_dio:.1f} days. Formula: AVG(on_hand_qty / avg_daily_demand)"
+            }
+        else:
+            metrics['avg_dio'] = {"value": "N/A", "delta": None}
+
+        metrics['critical_stock'] = {
+            "value": f"{critical_stock:,}",
+            "delta": None,
+            "help": f"**Business Logic:** Count of SKUs with critical stock-out risk (DIO < 30 days). Current: {critical_stock:,} SKUs. Formula: COUNT(WHERE dio < 30)"
+        }
     else:
         metrics['inventory_units'] = {"value": "N/A", "delta": None}
+        metrics['inventory_value'] = {"value": "N/A", "delta": None}
+        metrics['avg_dio'] = {"value": "N/A", "delta": None}
+        metrics['critical_stock'] = {"value": "N/A", "delta": None}
 
     return metrics
 
@@ -155,8 +198,10 @@ def render_overview_page(service_data, backorder_data, inventory_data):
     # Calculate metrics
     metrics = calculate_overview_metrics(service_data, backorder_data, inventory_data)
 
-    # Render KPI row
+    # Render KPI rows
     st.subheader("Key Performance Indicators")
+
+    # Row 1: Service & Order Fulfillment
     kpi_row_1 = {
         "Service Level": metrics.get('service_level', {}),
         "Total Orders": metrics.get('total_orders', {}),
@@ -166,12 +211,23 @@ def render_overview_page(service_data, backorder_data, inventory_data):
 
     st.divider()
 
+    # Row 2: Inventory Health
     kpi_row_2 = {
-        "Avg Backorder Age": metrics.get('avg_backorder_age', {}),
+        "Inventory Value": metrics.get('inventory_value', {}),
         "Inventory Units": metrics.get('inventory_units', {}),
-        "": {"value": "", "delta": None}  # Placeholder for future metric
+        "Avg DIO": metrics.get('avg_dio', {})
     }
     render_kpi_row(kpi_row_2)
+
+    st.divider()
+
+    # Row 3: Alerts & Risk
+    kpi_row_3 = {
+        "Avg Backorder Age": metrics.get('avg_backorder_age', {}),
+        "Critical Stock SKUs": metrics.get('critical_stock', {}),
+        "": {"value": "", "delta": None}  # Placeholder for future metric
+    }
+    render_kpi_row(kpi_row_3)
 
     st.divider()
 

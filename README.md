@@ -72,6 +72,41 @@ The dashboard integrates multiple data streams:
 
    Open your browser to `http://localhost:8501`
 
+### Git LFS Setup (for Contributors)
+
+This repository uses **Git Large File Storage (LFS)** to manage large CSV data files. If you're cloning the repository or contributing changes:
+
+1. **Install Git LFS** (if not already installed)
+   ```bash
+   # Windows (with Git for Windows)
+   git lfs install
+
+   # Mac (with Homebrew)
+   brew install git-lfs
+   git lfs install
+
+   # Linux
+   sudo apt-get install git-lfs
+   git lfs install
+   ```
+
+2. **Clone the repository** (Git LFS will automatically download large files)
+   ```bash
+   git clone https://github.com/tj309c/Supply-Chain-Dashboard.git
+   cd Supply-Chain-Dashboard
+   ```
+
+3. **Verify LFS files downloaded**
+   ```bash
+   git lfs ls-files
+   ```
+
+**Note**: CSV files (ORDERS.csv, DELIVERIES.csv, INVENTORY.csv, etc.) are tracked with Git LFS. The first time you clone or pull, Git LFS will download these files automatically.
+
+**GitHub LFS Limits**:
+- Free tier: 1GB storage, 1GB/month bandwidth
+- Files tracked: *.csv (all CSV files in the repository)
+
 ## 📊 Features
 
 ## 🪟 Windows startup helpers (optional)

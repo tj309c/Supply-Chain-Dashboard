@@ -1,4 +1,4 @@
-# Data files (too large for GitHub)
+# Data files (now tracked with Git LFS)
 data/*.csv
 
 # Python
