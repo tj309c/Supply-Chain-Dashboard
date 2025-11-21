@@ -100,12 +100,14 @@ def render_data_table(df, title=None, max_rows=100, downloadable=True, download_
     # Download button
     if downloadable:
         csv = df.to_csv(index=False).encode('utf-8')
+        # Use id() to ensure unique key even if filename is the same
+        unique_key = f"download_{download_filename}_{id(df)}"
         st.download_button(
             label="📥 Download Full Data",
             data=csv,
             file_name=download_filename,
             mime="text/csv",
-            key=f"download_{download_filename}"
+            key=unique_key
         )
 
 def render_chart(fig, title=None, height=400):

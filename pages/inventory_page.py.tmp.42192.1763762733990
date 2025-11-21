@@ -26,8 +26,7 @@ from ui_components import (
 )
 from business_rules import (
     convert_currency, get_movement_classification, get_stock_out_risk_level,
-    get_scrap_threshold, INVENTORY_RULES, CURRENCY_RULES,
-    load_alternate_codes_mapping, get_alternate_codes, get_current_code, is_old_code
+    get_scrap_threshold, INVENTORY_RULES, CURRENCY_RULES
 )
 
 # ===== SETTINGS AND CONFIGURATION =====
@@ -309,15 +308,15 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
 
     # Get alternate codes for each SKU
     df['alternate_codes'] = df['sku'].apply(
-        lambda sku: ', '.join(get_alternate_codes(sku))
-        if get_alternate_codes(sku) else ''
+        lambda sku: ', '.join(get_alternate_codes(sku, alt_codes_mapping))
+        if get_alternate_codes(sku, alt_codes_mapping) else ''
     )
 
     # Build the 19-field export
     scrap_list = pd.DataFrame({
         'Material': df['sku'],
         'Alternate Codes': df['alternate_codes'],
-        'Storage Location': df.get('storage_location', ''),
+        'Storage Location': df['storage_location'],
         'Description': df.get('product_name', ''),
         'SKU Creation Date': df.get('activation_date', ''),
         'Flag Status (PLM Current Status)': df.get('plm_status', ''),
@@ -906,106 +905,6 @@ def render_scrap_opportunity_analysis(inventory_data, currency="USD", scrap_thre
             max_rows=100
         )
 
-# ===== ALTERNATE CODE ALERTS =====
-
-def render_alternate_code_alerts(inventory_data, currency="USD"):
-    """Render alerts for inventory split across alternate codes"""
-    if inventory_data.empty:
-        return
-
-    st.subheader("🔄 Alternate Code Alerts")
-
-    # Load alternate codes mapping
-    alt_codes_mapping = load_alternate_codes_mapping()
-
-    if not alt_codes_mapping['all_codes_by_family']:
-        st.info("No alternate codes mapping available")
-        return
-
-    value_col = f'stock_value_{currency.lower()}'
-
-    # Analyze inventory split
-    inventory_with_current = inventory_data.copy()
-    inventory_with_current['current_code'] = inventory_with_current['sku'].apply(get_current_code)
-    inventory_with_current['is_old'] = inventory_with_current['sku'].apply(is_old_code)
-
-    # Find SKU families with inventory on multiple codes
-    split_inventory = []
-
-    for current_code, family_codes in alt_codes_mapping['all_codes_by_family'].items():
-        family_inventory = inventory_with_current[
-            inventory_with_current['sku'].isin(family_codes)
-        ]
-
-        if len(family_inventory) > 1:  # Inventory exists on multiple codes
-            total_qty = family_inventory['on_hand_qty'].sum()
-            total_value = family_inventory[value_col].sum()
-
-            codes_detail = []
-            for _, row in family_inventory.iterrows():
-                codes_detail.append({
-                    'code': row['sku'],
-                    'is_old': row['is_old'],
-                    'qty': row['on_hand_qty'],
-                    'value': row[value_col]
-                })
-
-            split_inventory.append({
-                'current_code': current_code,
-                'num_codes': len(family_inventory),
-                'total_qty': total_qty,
-                'total_value': total_value,
-                'codes_detail': codes_detail
-            })
-
-    if split_inventory:
-        split_df = pd.DataFrame(split_inventory)
-        total_split_families = len(split_df)
-        total_split_value = split_df['total_value'].sum()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(
-                "SKU Families with Split Inventory",
-                f"{total_split_families:,}",
-                delta="⚠️",
-                help="SKU families with inventory on both old and current material codes"
-            )
-        with col2:
-            currency_symbol = "$" if currency == "USD" else "€"
-            st.metric(
-                "Total Value Split",
-                f"{currency_symbol}{total_split_value:,.0f}",
-                help="Total inventory value split across alternate codes"
-            )
-
-        with st.expander("⚠️ View Split Inventory Details", expanded=False):
-            st.caption("**Recommendation:** Consolidate inventory by depleting old code inventory first before new code")
-
-            display_split = split_df.sort_values('total_value', ascending=False).head(20).copy()
-
-            display_split['Codes'] = display_split['codes_detail'].apply(
-                lambda x: ', '.join([
-                    f"{c['code']}{'*' if c['is_old'] else ''} ({int(c['qty'])})"
-                    for c in x
-                ])
-            )
-
-            display_df = pd.DataFrame({
-                'Current Code': display_split['current_code'],
-                'Split Across': display_split['num_codes'].astype(int),
-                'Total Qty': display_split['total_qty'].astype(int),
-                'Total Value': display_split['total_value'].apply(lambda x: f"{currency_symbol}{x:,.0f}"),
-                'Distribution': display_split['Codes']
-            })
-
-            st.dataframe(display_df, hide_index=True, use_container_width=True)
-            st.caption("* indicates old/obsolete code | Priority: Use old code inventory first")
-
-    else:
-        st.success("✅ No inventory split detected - all SKU families consolidated under one code")
-
-
 # ===== STOCK-OUT RISK ANALYSIS =====
 
 def render_stockout_risk_analysis(inventory_data, currency="USD"):
@@ -1137,11 +1036,6 @@ def render_inventory_page(inventory_data):
     # Calculate and display metrics
     metrics = calculate_inventory_metrics(filtered_data, currency)
     render_kpi_row(metrics)
-
-    st.divider()
-
-    # === ALTERNATE CODE ALERTS ===
-    render_alternate_code_alerts(filtered_data, currency)
 
     st.divider()
 

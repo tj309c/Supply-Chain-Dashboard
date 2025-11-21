@@ -19,8 +19,11 @@ from io import BytesIO
 from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ui_components import render_page_header, render_kpi_row, render_chart, render_data_table, render_filter_section
-from business_rules import BACKORDER_RULES
+from ui_components import render_page_header, render_kpi_row, render_chart, render_data_table, render_filter_section, render_info_box
+from business_rules import (
+    BACKORDER_RULES,
+    load_alternate_codes_mapping, get_alternate_codes, get_current_code, is_old_code
+)
 
 # ===== SETTINGS AND CONFIGURATION =====
 
@@ -407,9 +410,120 @@ def calculate_priority_score(backorder_data):
 
     return backorder_data
 
+# ===== ALTERNATE CODE OPPORTUNITIES =====
+
+def render_alternate_code_opportunities(backorder_data, inventory_data):
+    """Alert for backorders on old codes where inventory exists on current code"""
+    if backorder_data.empty or inventory_data.empty:
+        return
+
+    st.subheader("🔄 Alternate Code Fulfillment Opportunities")
+
+    # Load alternate codes mapping
+    alt_codes_mapping = load_alternate_codes_mapping()
+
+    if not alt_codes_mapping['all_codes_by_family']:
+        st.info("No alternate codes mapping available")
+        return
+
+    # Normalize codes
+    backorder_with_current = backorder_data.copy()
+    backorder_with_current['current_code'] = backorder_with_current['sku'].apply(get_current_code)
+    backorder_with_current['is_old'] = backorder_with_current['sku'].apply(is_old_code)
+
+    inventory_with_current = inventory_data.copy()
+    inventory_with_current['current_code'] = inventory_with_current['sku'].apply(get_current_code)
+
+    # Find old code backorders
+    old_code_backorders = backorder_with_current[backorder_with_current['is_old'] == True]
+
+    opportunities = []
+
+    for _, bo_row in old_code_backorders.iterrows():
+        old_sku = bo_row['sku']
+        current_sku = bo_row['current_code']
+        backorder_qty = bo_row['backorder_qty']
+
+        # Check if inventory exists on current code
+        current_inventory = inventory_with_current[
+            inventory_with_current['sku'] == current_sku
+        ]
+
+        if not current_inventory.empty:
+            available_qty = current_inventory['on_hand_qty'].sum()
+
+            if available_qty > 0:
+                opportunities.append({
+                    'old_code': old_sku,
+                    'current_code': current_sku,
+                    'backorder_qty': backorder_qty,
+                    'available_qty': available_qty,
+                    'can_fulfill': min(backorder_qty, available_qty),
+                    'customer': bo_row.get('customer_name', 'Unknown'),
+                    'order': bo_row.get('sales_order', 'Unknown'),
+                    'days_on_bo': bo_row.get('days_on_backorder', 0),
+                    'priority': 'High' if bo_row.get('days_on_backorder', 0) >= 30 else 'Medium'
+                })
+
+    if opportunities:
+        opps_df = pd.DataFrame(opportunities)
+        total_opps = len(opps_df)
+        total_fulfillable = opps_df['can_fulfill'].sum()
+        high_priority = len(opps_df[opps_df['priority'] == 'High'])
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Fulfillment Opportunities",
+                f"{total_opps:,}",
+                delta="⚠️",
+                help="Backorders on old codes that can be fulfilled with current code inventory"
+            )
+
+        with col2:
+            st.metric(
+                "Units Can Fulfill",
+                f"{int(total_fulfillable):,}",
+                help="Total units that can be fulfilled by switching to current code"
+            )
+
+        with col3:
+            st.metric(
+                "High Priority (30+ days)",
+                f"{high_priority:,}",
+                delta="❌" if high_priority > 0 else None,
+                help="Critical backorders aged 30+ days"
+            )
+
+        with st.expander("⚠️ View Fulfillment Opportunities", expanded=True):
+            st.caption("**Action:** Update order material code from old to current code to fulfill with available inventory")
+
+            display_df = opps_df.sort_values('days_on_bo', ascending=False).copy()
+
+            display_table = pd.DataFrame({
+                'Priority': display_df['priority'],
+                'Old Code (BO)': display_df['old_code'],
+                'Current Code (Inv)': display_df['current_code'],
+                'BO Qty': display_df['backorder_qty'].astype(int),
+                'Available': display_df['available_qty'].astype(int),
+                'Can Fulfill': display_df['can_fulfill'].astype(int),
+                'Days on BO': display_df['days_on_bo'].astype(int),
+                'Customer': display_df['customer'],
+                'Order': display_df['order']
+            })
+
+            st.dataframe(display_table, hide_index=True, use_container_width=True)
+
+            st.caption("**Business Rule:** Prioritize using old code inventory first before new code inventory")
+
+    else:
+        st.success("✅ No old code backorder opportunities - all backorders are on current codes or no inventory available")
+
+
 # ===== MAIN RENDER FUNCTION =====
 
-def render_backorder_page(backorder_data):
+def render_backorder_page(backorder_data, inventory_data=None):
     """Main render function for backorder page"""
 
     render_page_header(
@@ -480,6 +594,11 @@ def render_backorder_page(backorder_data):
         return
 
     st.caption(f"Showing {len(filtered_data):,} of {len(backorder_data):,} backorders")
+
+    # === ALTERNATE CODE OPPORTUNITIES (if inventory data available) ===
+    if inventory_data is not None:
+        render_alternate_code_opportunities(filtered_data, inventory_data)
+        st.divider()
 
     # Export button
     export_data = prepare_backorder_export_data(filtered_data, settings['export_section'], settings)

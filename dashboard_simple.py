@@ -32,6 +32,8 @@ from pages.overview_page import render_overview_page
 from pages.service_level_page import render_service_level_page
 from pages.inventory_page import render_inventory_page
 from pages.backorder_page import render_backorder_page
+from pages.sku_mapping_page import render_sku_mapping_page
+from pages.data_upload_page import render_data_upload_page
 from pages.inbound_page import render_inbound_page
 from pages.forecast_page import render_forecast_page
 from pages.debug_page import render_debug_page
@@ -187,7 +189,8 @@ def main():
         "📊 Overview": "overview",
         "🚚 Service Level": "service_level",
         "⚠️ Backorders": "backorders",
-        "📦 Inventory": "inventory"
+        "📦 Inventory": "inventory",
+        "🔄 SKU Mapping": "sku_mapping"
     }
 
     future_pages = {
@@ -196,6 +199,7 @@ def main():
     }
 
     utility_pages = {
+        "📤 Data Management": "data_upload",
         "🔧 Debug & Logs": "debug"
     }
 
@@ -262,16 +266,22 @@ def main():
         render_service_level_page(service_data=data['service'])
 
     elif selected_page == "backorders":
-        render_backorder_page(backorder_data=data['backorder'])
+        render_backorder_page(backorder_data=data['backorder'], inventory_data=data['inventory'])
 
     elif selected_page == "inventory":
         render_inventory_page(inventory_data=data['inventory_analysis'])
+
+    elif selected_page == "sku_mapping":
+        render_sku_mapping_page(inventory_data=data['inventory'], backorder_data=data['backorder'])
 
     elif selected_page == "forecasting":
         render_forecast_page(orders_data=None, deliveries_data=None, master_data=None)
 
     elif selected_page == "inbound":
         render_inbound_page(inbound_data=None)
+
+    elif selected_page == "data_upload":
+        render_data_upload_page()
 
     elif selected_page == "debug":
         render_debug_page(debug_info=data)
