@@ -268,6 +268,47 @@ STORAGE_LOCATION_RULES = {
 }
 
 
+# ===== ALTERNATE CODES RULES =====
+
+ALTERNATE_CODES_RULES = {
+    "normalization": {
+        "auto_normalize": True,  # Automatically normalize old codes to current codes
+        "normalize_inventory": True,  # Aggregate inventory across alternate codes
+        "normalize_demand": True,  # Aggregate historical demand across alternate codes
+        "normalize_backorders": True,  # Show backorders with current code reference
+        "default_view": "aggregated"  # Default view: "aggregated" or "split"
+    },
+
+    "display": {
+        "show_alternate_codes": True,  # Show alternate codes in tooltips/columns
+        "show_code_transition_dates": False,  # Show when code changed (if data available)
+        "highlight_old_codes": True,  # Highlight when displaying old code data
+        "max_alternates_display": 3  # Maximum alternate codes to show in tooltip
+    },
+
+    "alerts": {
+        "alert_on_old_code_backorders": True,  # Alert when backorders exist on old codes
+        "alert_on_split_inventory": True,  # Alert when inventory split across codes
+        "alert_on_old_code_orders": True,  # Alert when new orders use old codes
+        "critical_backorder_threshold": 0  # Alert on ANY old code backorder
+    },
+
+    "business_logic": {
+        # When backorder exists on old code and inventory exists on current code
+        "recommend_code_update": True,  # Recommend updating order to current code
+        "prioritize_old_inventory_first": True,  # Use old SKU inventory first before new
+        "track_inventory_by_code": True,  # Track which code has which inventory
+        "consolidate_reporting": True  # Consolidate all reports under current code
+    },
+
+    "data_quality": {
+        "flag_missing_current_codes": True,  # Flag if current code not in master data
+        "flag_circular_references": True,  # Flag if A→B→A code mappings exist
+        "validate_code_hierarchy": True  # Ensure current code is truly current
+    }
+}
+
+
 # ===== LEAD TIME RULES =====
 
 LEAD_TIME_RULES = {
@@ -725,6 +766,246 @@ def get_storage_locations_by_category(category):
     return categories.get(category, [])
 
 
+# ===== ALTERNATE CODES HELPER FUNCTIONS =====
+
+# Global cache for alternate codes mapping
+_ALTERNATE_CODES_CACHE = None
+
+
+def load_alternate_codes_mapping(file_path="ALTERNATE_CODES.csv"):
+    """
+    Load and parse the alternate codes mapping file.
+
+    Args:
+        file_path: Path to ALTERNATE_CODES.csv
+
+    Returns:
+        Dictionary with bidirectional mappings:
+        {
+            'current_to_old': {current_code: [old_code1, old_code2, ...]},
+            'old_to_current': {old_code: current_code},
+            'all_codes_by_family': {current_code: [current, old1, old2, ...]}
+        }
+    """
+    global _ALTERNATE_CODES_CACHE
+
+    # Return cached version if available
+    if _ALTERNATE_CODES_CACHE is not None:
+        return _ALTERNATE_CODES_CACHE
+
+    import pandas as pd
+    import os
+
+    # Initialize mappings
+    current_to_old = {}
+    old_to_current = {}
+    all_codes_by_family = {}
+
+    if not os.path.exists(file_path):
+        print(f"Warning: Alternate codes file not found at {file_path}")
+        _ALTERNATE_CODES_CACHE = {
+            'current_to_old': current_to_old,
+            'old_to_current': old_to_current,
+            'all_codes_by_family': all_codes_by_family
+        }
+        return _ALTERNATE_CODES_CACHE
+
+    try:
+        # Load CSV - try multiple encodings
+        try:
+            df = pd.read_csv(file_path, dtype=str, encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(file_path, dtype=str, encoding='latin-1')
+            except UnicodeDecodeError:
+                df = pd.read_csv(file_path, dtype=str, encoding='cp1252')
+
+        # Expected columns
+        col_current = 'SAP Material Current'
+        col_last_old = 'SAP Material Last Old Code'
+        col_original = 'SAP Material Original Code'
+
+        for idx, row in df.iterrows():
+            current_code = str(row[col_current]).strip() if pd.notna(row[col_current]) else None
+            last_old_code = str(row[col_last_old]).strip() if pd.notna(row[col_last_old]) else None
+            original_code = str(row[col_original]).strip() if pd.notna(row[col_original]) else None
+
+            # Skip if no current code
+            if not current_code or current_code == 'nan':
+                continue
+
+            # Build list of all alternate codes for this family
+            all_codes = [current_code]
+
+            if last_old_code and last_old_code != 'nan':
+                all_codes.append(last_old_code)
+                old_to_current[last_old_code] = current_code
+
+            if original_code and original_code != 'nan' and original_code != last_old_code:
+                all_codes.append(original_code)
+                old_to_current[original_code] = current_code
+
+            # Store mappings
+            if len(all_codes) > 1:
+                current_to_old[current_code] = all_codes[1:]  # All except current
+                all_codes_by_family[current_code] = all_codes
+
+        _ALTERNATE_CODES_CACHE = {
+            'current_to_old': current_to_old,
+            'old_to_current': old_to_current,
+            'all_codes_by_family': all_codes_by_family
+        }
+
+        return _ALTERNATE_CODES_CACHE
+
+    except Exception as e:
+        print(f"Error loading alternate codes: {str(e)}")
+        _ALTERNATE_CODES_CACHE = {
+            'current_to_old': current_to_old,
+            'old_to_current': old_to_current,
+            'all_codes_by_family': all_codes_by_family
+        }
+        return _ALTERNATE_CODES_CACHE
+
+
+def get_current_code(material_code):
+    """
+    Get the current/active code for a given material code.
+
+    Args:
+        material_code: Any material code (current or old)
+
+    Returns:
+        Current material code, or original code if not found in mappings
+    """
+    mapping = load_alternate_codes_mapping()
+
+    # If it's an old code, return the current code
+    if material_code in mapping['old_to_current']:
+        return mapping['old_to_current'][material_code]
+
+    # Otherwise assume it's already the current code
+    return material_code
+
+
+def get_alternate_codes(material_code):
+    """
+    Get all alternate codes for a given material code.
+
+    Args:
+        material_code: Any material code (current or old)
+
+    Returns:
+        List of all alternate codes (including current), or [material_code] if no alternates
+    """
+    mapping = load_alternate_codes_mapping()
+
+    # First normalize to current code
+    current_code = get_current_code(material_code)
+
+    # Get all codes in this family
+    if current_code in mapping['all_codes_by_family']:
+        return mapping['all_codes_by_family'][current_code]
+
+    return [material_code]
+
+
+def is_old_code(material_code):
+    """
+    Check if a material code is an old/obsolete code.
+
+    Args:
+        material_code: Material code to check
+
+    Returns:
+        Boolean indicating if this is an old code
+    """
+    mapping = load_alternate_codes_mapping()
+    return material_code in mapping['old_to_current']
+
+
+def has_alternate_codes(material_code):
+    """
+    Check if a material code has alternate codes.
+
+    Args:
+        material_code: Material code to check
+
+    Returns:
+        Boolean indicating if alternate codes exist
+    """
+    alternate_codes = get_alternate_codes(material_code)
+    return len(alternate_codes) > 1
+
+
+def normalize_material_codes(df, code_column='Material Number'):
+    """
+    Normalize all material codes in a dataframe to current codes.
+
+    Args:
+        df: DataFrame containing material codes
+        code_column: Name of the column containing material codes
+
+    Returns:
+        DataFrame with normalized codes and additional columns:
+        - {code_column}_current: Current code
+        - {code_column}_original: Original code from data
+        - has_alternate_codes: Boolean flag
+        - is_old_code: Boolean flag
+    """
+    import pandas as pd
+
+    if code_column not in df.columns:
+        return df
+
+    # Create a copy to avoid modifying original
+    df = df.copy()
+
+    # Store original code
+    df[f'{code_column}_original'] = df[code_column]
+
+    # Normalize to current code
+    df[f'{code_column}_current'] = df[code_column].apply(get_current_code)
+
+    # Add flags
+    df['has_alternate_codes'] = df[code_column].apply(has_alternate_codes)
+    df['is_old_code'] = df[code_column].apply(is_old_code)
+
+    # Replace the main column with current code if auto_normalize is enabled
+    if ALTERNATE_CODES_RULES['normalization']['auto_normalize']:
+        df[code_column] = df[f'{code_column}_current']
+
+    return df
+
+
+def get_alternate_codes_summary():
+    """
+    Get summary statistics about alternate codes.
+
+    Returns:
+        Dictionary with summary metrics
+    """
+    mapping = load_alternate_codes_mapping()
+
+    total_families = len(mapping['all_codes_by_family'])
+    total_old_codes = len(mapping['old_to_current'])
+
+    # Count families by number of codes
+    codes_per_family = {}
+    for current, all_codes in mapping['all_codes_by_family'].items():
+        num_codes = len(all_codes)
+        codes_per_family[num_codes] = codes_per_family.get(num_codes, 0) + 1
+
+    return {
+        'total_sku_families': total_families,
+        'total_old_codes': total_old_codes,
+        'total_unique_codes': total_families + total_old_codes,
+        'families_with_2_codes': codes_per_family.get(2, 0),
+        'families_with_3_codes': codes_per_family.get(3, 0),
+        'families_with_4plus_codes': sum(v for k, v in codes_per_family.items() if k >= 4)
+    }
+
+
 # ===== DOCUMENTATION EXPORT =====
 
 def export_business_rules_documentation(output_path="BUSINESS_RULES_DOCUMENTATION.md"):
@@ -803,6 +1084,29 @@ def export_business_rules_documentation(output_path="BUSINESS_RULES_DOCUMENTATIO
         for avail_type, definition in STORAGE_LOCATION_RULES["availability_mapping"].items():
             f.write(f"- **{avail_type.title()}**: {definition}\n")
         f.write("\n")
+
+        # Alternate Codes Rules
+        f.write("### Alternate Codes Rules\n\n")
+        f.write("**Description:** Material code alternate/supersession mapping rules\n\n")
+        f.write(f"```python\n{ALTERNATE_CODES_RULES}\n```\n\n")
+
+        # Add alternate codes summary
+        f.write("**Alternate Codes Summary:**\n\n")
+        try:
+            summary = get_alternate_codes_summary()
+            f.write(f"- Total SKU Families: {summary['total_sku_families']}\n")
+            f.write(f"- Total Old Codes: {summary['total_old_codes']}\n")
+            f.write(f"- Families with 2 codes: {summary['families_with_2_codes']}\n")
+            f.write(f"- Families with 3+ codes: {summary['families_with_3_codes']}\n\n")
+        except Exception as e:
+            f.write(f"_Could not load alternate codes summary: {str(e)}_\n\n")
+
+        f.write("**Business Impact:**\n\n")
+        f.write("- **Inventory Consolidation**: Automatically aggregates inventory across all alternate codes\n")
+        f.write("- **Historical Demand**: Combines demand history from old and current codes for accurate forecasting\n")
+        f.write("- **Backorder Alerts**: Flags backorders on old codes when inventory exists on current code\n")
+        f.write("- **Code Migration**: Recommends updating orders from old codes to current codes\n")
+        f.write("- **Reporting**: All reports consolidate data under current/active material codes\n\n")
 
 
 if __name__ == "__main__":

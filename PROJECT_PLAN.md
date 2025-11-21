@@ -211,7 +211,144 @@ Planned enhancements for inventory module:
 
 ---
 
-### 2.4 Inbound Logistics Module (Priority: MEDIUM)
+### 2.4 User Data Upload & Management Module (Priority: HIGH)
+**Status**: Planned - Not yet implemented
+
+**Objectives**:
+- Enable users to upload their own source data files
+- Provide data validation and error checking
+- Clear cached data and load fresh user-uploaded data
+- Provide template files for each required data source
+- Ensure data quality and consistency
+
+**Data Sources Supported**:
+1. **ORDERS.csv** - Customer orders and backorder tracking
+2. **DELIVERIES.csv** - Shipment and delivery records
+3. **INVENTORY.csv** - Real-time stock levels
+4. **Master Data.csv** - Product catalog with SKU metadata
+5. **DOMESTIC INBOUND.csv** - Inbound logistics (optional)
+6. **Domestic Vendor POs.csv** - Purchase order tracking (optional)
+7. **ALTERNATE_CODES.csv** - SKU alternate/legacy code mappings (optional)
+
+**Key Features**:
+```
+□ File upload interface for each data source
+□ Template export functionality (CSV templates with correct column headers)
+□ Data validation on upload (column checks, data type validation)
+□ Preview uploaded data before processing
+□ Error reporting with specific row/column details
+□ Clear cache and reload with user data
+□ File size and format checking
+□ Success/failure notifications
+□ Data source status dashboard (which files loaded, when, row counts)
+□ Rollback to default data option
+□ Upload history and audit trail
+```
+
+**Template Export Specifications**:
+```
+Each template should include:
+- All required column headers in correct order
+- Data type hints (via sample row or comments)
+- Required vs optional field indicators
+- Example data rows (1-2 samples)
+- Instructions/notes in header comment
+- File naming convention guidance
+```
+
+**Validation Rules**:
+```
+1. ORDERS.csv:
+   - Required columns: Orders Detail - Order Document Number, Item - SAP Model Code,
+     Order Creation Date: Date, Original Customer Name, Orders - TOTAL Orders Qty,
+     Orders - TOTAL To Be Delivered Qty, Orders - TOTAL Cancelled Qty
+   - Date format: M/D/YY
+   - Numeric fields: Orders Qty, To Be Delivered Qty, Cancelled Qty
+   - No duplicate order line items (Order Number + SKU)
+
+2. DELIVERIES.csv:
+   - Required columns: Deliveries Detail - Order Document Number, Item - SAP Model Code,
+     Delivery Creation Date: Date, Deliveries - TOTAL Goods Issue Qty
+   - Date format: M/D/YY
+   - Numeric fields: Goods Issue Qty
+   - Delivery date must be >= order date (if joined)
+
+3. INVENTORY.csv:
+   - Required columns: Storage Location, Material Number, Free Qt, Last Purchase Price
+   - Numeric fields: Free Qt, Last Purchase Price
+   - No negative quantities
+   - No duplicate SKU+Location combinations
+
+4. Master Data.csv:
+   - Required columns: Material Number, PLM: Level Classification 4, Activation Date (Code),
+     PLM: PLM Current Status, PLM: Expiration Date
+   - Date format: Activation (M/D/YY), Expiration (YYYYMMDD)
+   - No duplicate Material Numbers
+   - Activation date must be <= Today
+
+5. ALTERNATE_CODES.csv:
+   - Required columns: SAP Material Current, SAP Material Last Old Code,
+     SAP Material Original Code
+   - All codes must be valid strings
+   - Current code cannot be blank
+```
+
+**Technical Tasks**:
+- [ ] Create data upload page (`pages/data_upload_page.py`)
+- [ ] Build file upload widgets for each data source
+- [ ] Implement template export function with correct headers
+- [ ] Create validation framework for each file type
+- [ ] Build error reporting UI with detailed messages
+- [ ] Add data preview functionality
+- [ ] Implement cache clearing mechanism
+- [ ] Create data source status dashboard
+- [ ] Add rollback to default data option
+- [ ] Build upload history tracking
+- [ ] Add file size limits and format checking
+- [ ] Implement session state management for uploaded files
+- [ ] Create user documentation for upload process
+- [ ] Add success/error notifications with actionable guidance
+
+**User Interface Design**:
+```
+┌─ Data Upload & Management ─────────────────────┐
+│                                                 │
+│ 📥 Upload Data Sources                          │
+│ ├─ Required Files (3/3 uploaded)               │
+│ │  ✓ ORDERS.csv         [Replace] [Template]  │
+│ │  ✓ DELIVERIES.csv     [Replace] [Template]  │
+│ │  ✓ INVENTORY.csv      [Replace] [Template]  │
+│ │  ✓ Master Data.csv    [Replace] [Template]  │
+│ │                                              │
+│ └─ Optional Files (1/3 uploaded)               │
+│    ✓ ALTERNATE_CODES.csv [Replace] [Template]  │
+│    ○ DOMESTIC INBOUND.csv  [Upload] [Template] │
+│    ○ Domestic Vendor POs   [Upload] [Template] │
+│                                                 │
+│ 📊 Data Status                                  │
+│ ├─ ORDERS: 45,231 rows | Last updated: 2025-11-21 14:32 │
+│ ├─ DELIVERIES: 123,456 rows | Last updated: 2025-11-21 14:32 │
+│ ├─ INVENTORY: 8,942 rows | Last updated: 2025-11-21 14:32 │
+│ └─ Master Data: 12,384 rows | Last updated: 2025-11-21 14:32 │
+│                                                 │
+│ ⚙️ Actions                                       │
+│ [🔄 Refresh All Data] [🗑️ Clear Cache]        │
+│ [📥 Download All Templates] [↩️ Restore Defaults] │
+│                                                 │
+│ 📜 Upload History (Last 10)                     │
+│ └─ Table with: Timestamp, File, User, Status, Rows │
+└─────────────────────────────────────────────────┘
+```
+
+**Integration**:
+- Add to main dashboard navigation as "📤 Data Management"
+- Link from sidebar "Quick Actions" section
+- Integrate with existing data_loader.py infrastructure
+- Use file_loader.py safe_read_csv with session state
+
+---
+
+### 2.5 Inbound Logistics Module (Priority: MEDIUM)
 **Status**: Data sources available, module needs creation
 
 **Objectives**:
@@ -247,7 +384,7 @@ Planned enhancements for inventory module:
 
 ---
 
-### 2.5 Demand Forecasting Module (Priority: MEDIUM)
+### 2.6 Demand Forecasting Module (Priority: MEDIUM)
 **Status**: Placeholder exists, needs full implementation
 
 **Objectives**:
@@ -283,7 +420,7 @@ Planned enhancements for inventory module:
 
 ---
 
-### 2.6 Executive Overview Module (Priority: HIGH)
+### 2.7 Executive Overview Module (Priority: HIGH)
 **Status**: Basic implementation exists, needs enhancement
 
 **Objectives**:

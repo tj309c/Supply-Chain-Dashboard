@@ -153,31 +153,39 @@ def load_master_data(master_data_path, file_key='master'):
     error_df = pd.DataFrame() 
     
     try:
-        # --- UPDATED: Load SKU, Category, and Activation Date ---
-        cols_to_load = ["Material Number", "PLM: Level Classification 4", "Activation Date (Code)"]
+        # --- UPDATED: Load SKU, Category, Activation Date, and PLM fields ---
+        cols_to_load = [
+            "Material Number",
+            "PLM: Level Classification 4",
+            "Activation Date (Code)",
+            "PLM: PLM Current Status",
+            "PLM: Expiration Date"
+        ]
         df = safe_read_csv(file_key, master_data_path, usecols=cols_to_load, low_memory=False)
         logs.append(f"INFO: Found and loaded {len(df)} rows from Master Data.")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'Master Data.csv': {e}")
         return logs, pd.DataFrame(), pd.DataFrame()
 
-    # --- UPDATED: Load SKU, Category, and Activation Date ---
+    # --- UPDATED: Load SKU, Category, Activation Date, and PLM fields ---
     master_cols = {
         "Material Number": "sku",
         "PLM: Level Classification 4": "category",
-        "Activation Date (Code)": "activation_date"
+        "Activation Date (Code)": "activation_date",
+        "PLM: PLM Current Status": "plm_status",
+        "PLM: Expiration Date": "plm_expiration_date"
     }
-    if not check_columns(df, master_cols.keys(), "Master Data.csv", logs): 
+    if not check_columns(df, master_cols.keys(), "Master Data.csv", logs):
         return logs, pd.DataFrame(), pd.DataFrame()
-    
+
     duplicates = df[df.duplicated(subset=['Material Number'], keep=False)]
     if not duplicates.empty:
         logs.append(f"WARNING: Found {len(duplicates)} duplicated SKUs in Master Data. Keeping first instance.")
         error_df = pd.concat([error_df, duplicates])
-        
+
     df = df[list(master_cols.keys())].rename(columns=master_cols)
 
-    str_cols = ['sku', 'category']
+    str_cols = ['sku', 'category', 'plm_status']
     for col in str_cols:
         df[col] = clean_string_column(df[col])
 
@@ -187,6 +195,13 @@ def load_master_data(master_data_path, file_key='master'):
     activation_date_nulls = df['activation_date'].isna().sum()
     if activation_date_nulls > 0:
         logs.append(f"WARNING: {activation_date_nulls} SKUs have missing/invalid activation dates. These will use full 365-day divisor for demand calculation.")
+
+    # --- NEW: Parse PLM expiration date ---
+    logs.append("INFO: Parsing PLM Expiration Dates...")
+    df['plm_expiration_date'] = pd.to_datetime(df['plm_expiration_date'], format='%Y%m%d', errors='coerce')
+    plm_exp_nulls = df['plm_expiration_date'].isna().sum()
+    if plm_exp_nulls > 0:
+        logs.append(f"INFO: {plm_exp_nulls} SKUs have missing/invalid PLM expiration dates.")
 
     df = df.drop_duplicates(subset=['sku'])
     
@@ -742,8 +757,77 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
         logs.append(f"INFO: Calculated SKU age-based daily demand for {len(daily_demand)} SKUs from last 12 months of deliveries.")
         logs.append("INFO: Using activation date + 60 days to determine proper demand divisor (capped at 365 days).")
 
-        # Keep only necessary columns
+        # Keep only necessary columns for merging
         daily_demand = daily_demand[['sku', 'daily_demand']]
+
+        # --- NEW: Calculate Quarterly Demand (Rolling Q1-Q4) ---
+        logs.append("INFO: Calculating quarterly demand (rolling Q1-Q4)...")
+
+        # Get the last complete quarter end date
+        current_quarter = (TODAY.month - 1) // 3 + 1
+        current_year = TODAY.year
+
+        # Calculate Q4 end (most recent complete quarter)
+        if current_quarter == 1:
+            q4_end = pd.Timestamp(year=current_year-1, month=12, day=31)
+        elif current_quarter == 2:
+            q4_end = pd.Timestamp(year=current_year, month=3, day=31)
+        elif current_quarter == 3:
+            q4_end = pd.Timestamp(year=current_year, month=6, day=30)
+        else:  # current_quarter == 4
+            q4_end = pd.Timestamp(year=current_year, month=9, day=30)
+
+        # Calculate quarter boundaries (rolling backwards from Q4)
+        q4_start = q4_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
+        q3_end = q4_start - pd.Timedelta(days=1)
+        q3_start = q3_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
+        q2_end = q3_start - pd.Timedelta(days=1)
+        q2_start = q2_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
+        q1_end = q2_start - pd.Timedelta(days=1)
+        q1_start = q1_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
+
+        # Calculate demand for each quarter
+        q1_demand = deliveries_df[(deliveries_df['ship_date'] >= q1_start) & (deliveries_df['ship_date'] <= q1_end)].groupby('sku')['units_issued'].sum().reset_index()
+        q1_demand = q1_demand.rename(columns={'units_issued': 'q1_demand'})
+
+        q2_demand = deliveries_df[(deliveries_df['ship_date'] >= q2_start) & (deliveries_df['ship_date'] <= q2_end)].groupby('sku')['units_issued'].sum().reset_index()
+        q2_demand = q2_demand.rename(columns={'units_issued': 'q2_demand'})
+
+        q3_demand = deliveries_df[(deliveries_df['ship_date'] >= q3_start) & (deliveries_df['ship_date'] <= q3_end)].groupby('sku')['units_issued'].sum().reset_index()
+        q3_demand = q3_demand.rename(columns={'units_issued': 'q3_demand'})
+
+        q4_demand = deliveries_df[(deliveries_df['ship_date'] >= q4_start) & (deliveries_df['ship_date'] <= q4_end)].groupby('sku')['units_issued'].sum().reset_index()
+        q4_demand = q4_demand.rename(columns={'units_issued': 'q4_demand'})
+
+        # Rolling 1-year usage (sum of Q1-Q4)
+        rolling_1yr = total_demand.rename(columns={'total_units_issued': 'rolling_1yr_usage'})
+
+        logs.append(f"INFO: Q1 period: {q1_start.date()} to {q1_end.date()}")
+        logs.append(f"INFO: Q2 period: {q2_start.date()} to {q2_end.date()}")
+        logs.append(f"INFO: Q3 period: {q3_start.date()} to {q3_end.date()}")
+        logs.append(f"INFO: Q4 period: {q4_start.date()} to {q4_end.date()}")
+
+        # --- NEW: Calculate # of Quarters with History ---
+        # For each SKU, count how many quarters have had any demand since activation
+        logs.append("INFO: Calculating quarters with demand history since SKU activation...")
+
+        # Merge with activation dates
+        deliveries_with_activation = pd.merge(deliveries_df, sku_activation[['sku', 'activation_date']], on='sku', how='left')
+
+        # Only count deliveries after activation date
+        deliveries_with_activation = deliveries_with_activation[
+            (deliveries_with_activation['ship_date'] >= deliveries_with_activation['activation_date']) |
+            (deliveries_with_activation['activation_date'].isna())
+        ]
+
+        # Assign each delivery to a quarter
+        deliveries_with_activation['quarter_year'] = deliveries_with_activation['ship_date'].dt.to_period('Q')
+
+        # Count unique quarters with demand per SKU
+        qtrs_with_history = deliveries_with_activation.groupby('sku')['quarter_year'].nunique().reset_index()
+        qtrs_with_history = qtrs_with_history.rename(columns={'quarter_year': 'qtrs_with_history'})
+
+        logs.append(f"INFO: Calculated quarters with history for {len(qtrs_with_history)} SKUs.")
 
     except Exception as e:
         logs.append(f"ERROR: Failed to process 'DELIVERIES.csv' for demand calculation: {e}")
@@ -751,8 +835,23 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
 
     # 2. Merge demand with inventory and calculate DIO
     df = pd.merge(inventory_df, daily_demand, on='sku', how='left')
-    # --- FIX: Only fill NaN values in the 'daily_demand' column ---
+
+    # Merge quarterly demand
+    df = pd.merge(df, q1_demand, on='sku', how='left')
+    df = pd.merge(df, q2_demand, on='sku', how='left')
+    df = pd.merge(df, q3_demand, on='sku', how='left')
+    df = pd.merge(df, q4_demand, on='sku', how='left')
+    df = pd.merge(df, rolling_1yr, on='sku', how='left')
+    df = pd.merge(df, qtrs_with_history, on='sku', how='left')
+
+    # Fill NaN values with 0 for all demand columns
     df['daily_demand'] = df['daily_demand'].fillna(0)
+    df['q1_demand'] = df['q1_demand'].fillna(0)
+    df['q2_demand'] = df['q2_demand'].fillna(0)
+    df['q3_demand'] = df['q3_demand'].fillna(0)
+    df['q4_demand'] = df['q4_demand'].fillna(0)
+    df['rolling_1yr_usage'] = df['rolling_1yr_usage'].fillna(0)
+    df['qtrs_with_history'] = df['qtrs_with_history'].fillna(0).astype(int)
     
     # --- FIX: Add logging when daily_demand is zero (but keep logic unchanged) ---
     # Treat 0 daily demand as 0 DIO (inventory not moving = infinite days of inventory is not reported)

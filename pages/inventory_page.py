@@ -135,11 +135,24 @@ def render_inventory_settings_sidebar():
             "ABC Class A Items",
             "ABC Class B Items",
             "ABC Class C Items",
-            "Dead Stock Items"
+            "Dead Stock Items",
+            "Warehouse Scrap List (All SKUs)"
         ],
         key="export_section",
         help="Choose which data to export to Excel"
     )
+
+    # Scrap threshold slider (only shown for Warehouse Scrap List)
+    scrap_days_threshold = 730  # Default to 2 years
+    if export_section == "Warehouse Scrap List (All SKUs)":
+        scrap_days_threshold = st.sidebar.slider(
+            "Scrap Threshold (Days of Supply)",
+            min_value=365,
+            max_value=1095,
+            value=730,
+            step=30,
+            help="SKUs with inventory exceeding this many days of supply will be marked for potential scrap. Default: 730 days (2 years)"
+        )
 
     st.sidebar.divider()
 
@@ -151,7 +164,8 @@ def render_inventory_settings_sidebar():
         "export_section": export_section,
         "dio_buckets": dio_buckets,
         "use_custom_buckets": use_custom_buckets,
-        "use_count_based_abc": use_count_based
+        "use_count_based_abc": use_count_based,
+        "scrap_days_threshold": scrap_days_threshold
     }
 
 # ===== EXPORT FUNCTIONS =====
@@ -249,7 +263,87 @@ def create_excel_export(data, section_name, currency="USD"):
     output.seek(0)
     return output
 
-def prepare_export_data(inventory_data, section, currency, scrap_threshold):
+def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency):
+    """
+    Prepare comprehensive warehouse scrap list with all required fields
+
+    Args:
+        inventory_data: Full inventory DataFrame with quarterly demand data
+        scrap_days_threshold: Days of supply threshold (default 730 = 2 years)
+        currency: Currency for value calculations
+
+    Returns:
+        DataFrame with 19 required fields for warehouse scrap analysis
+    """
+    from business_rules import load_alternate_codes_mapping, get_alternate_codes
+
+    # Filter for SKUs with on-hand inventory only
+    df = inventory_data[inventory_data['on_hand_qty'] > 0].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # Load alternate codes
+    alt_codes_mapping = load_alternate_codes_mapping()
+
+    # Calculate scrap quantities
+    df['scrap_qty'] = df.apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * scrap_days_threshold))
+        if row['daily_demand'] > 0 else row['on_hand_qty'],
+        axis=1
+    )
+
+    # Calculate scrap value in USD
+    df['scrap_value_usd'] = df.apply(
+        lambda row: row['scrap_qty'] * convert_currency(
+            row['last_purchase_price'],
+            row.get('currency', 'USD'),
+            'USD'
+        ),
+        axis=1
+    )
+
+    # Calculate months of supply
+    df['months_of_supply'] = df['dio'] / 30
+
+    # Get alternate codes for each SKU
+    df['alternate_codes'] = df['sku'].apply(
+        lambda sku: ', '.join(get_alternate_codes(sku, alt_codes_mapping))
+        if get_alternate_codes(sku, alt_codes_mapping) else ''
+    )
+
+    # Build the 19-field export
+    scrap_list = pd.DataFrame({
+        'Material': df['sku'],
+        'Alternate Codes': df['alternate_codes'],
+        'Storage Location': df['storage_location'],
+        'Description': df.get('product_name', ''),
+        'SKU Creation Date': df.get('activation_date', ''),
+        'Flag Status (PLM Current Status)': df.get('plm_status', ''),
+        'Last Inbound Date': df.get('last_inbound_date', ''),  # Will be '' if not available
+        'PLM Expiration Date': df.get('plm_expiration_date', ''),
+        'Brand': df.get('brand', ''),  # Will be '' if not available
+        'Category': df.get('category', ''),
+        'STD Price': df['last_purchase_price'],
+        'Total STD Price': df['on_hand_qty'] * df['last_purchase_price'],
+        'Free Qt': df['on_hand_qty'],
+        'Q1 Demand': df.get('q1_demand', 0),
+        'Q2 Demand': df.get('q2_demand', 0),
+        'Q3 Demand': df.get('q3_demand', 0),
+        'Q4 Demand': df.get('q4_demand', 0),
+        'Rolling 1 Yr Usage': df.get('rolling_1yr_usage', 0),
+        '# of Qtrs with History': df.get('qtrs_with_history', 0),
+        'Months of Supply': df['months_of_supply'],
+        'Qty over 2 Yrs Supply': df['scrap_qty'],
+        'USD value over 2 Yrs Supply': df['scrap_value_usd']
+    })
+
+    # Sort by scrap value descending (highest value scrap opportunities first)
+    scrap_list = scrap_list.sort_values('USD value over 2 Yrs Supply', ascending=False)
+
+    return scrap_list
+
+def prepare_export_data(inventory_data, section, currency, scrap_threshold, scrap_days_threshold=730):
     """
     Prepare data for export based on selected section
 
@@ -258,6 +352,7 @@ def prepare_export_data(inventory_data, section, currency, scrap_threshold):
         section: Selected section name
         currency: Currency for value columns
         scrap_threshold: DIO threshold for scrap candidates
+        scrap_days_threshold: Days of supply threshold for warehouse scrap list (default 730 = 2 years)
 
     Returns:
         Filtered DataFrame
@@ -290,6 +385,9 @@ def prepare_export_data(inventory_data, section, currency, scrap_threshold):
 
     elif section == "Dead Stock Items":
         return inventory_data[inventory_data['movement_class'] == 'Dead Stock'].sort_values(value_col, ascending=False)
+
+    elif section == "Warehouse Scrap List (All SKUs)":
+        return prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
 
     return inventory_data
 
@@ -912,7 +1010,13 @@ def render_inventory_page(inventory_data):
         return
 
     # === EXPORT BUTTON ===
-    export_data = prepare_export_data(filtered_data, settings['export_section'], currency, scrap_threshold)
+    export_data = prepare_export_data(
+        filtered_data,
+        settings['export_section'],
+        currency,
+        scrap_threshold,
+        settings['scrap_days_threshold']
+    )
 
     if not export_data.empty:
         excel_file = create_excel_export(export_data, settings['export_section'], currency)

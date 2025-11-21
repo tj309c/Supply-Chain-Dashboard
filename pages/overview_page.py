@@ -64,7 +64,7 @@ def calculate_overview_metrics(service_data, backorder_data, inventory_data):
         metrics['inventory_units'] = {
             "value": f"{int(total_stock):,}",
             "delta": None,
-            "help": "Total units in inventory"
+            "help": f"**Business Logic:** Total units currently on-hand across all SKUs in all warehouse locations. Current: {int(total_stock):,} units. Formula: SUM(on_hand_qty)"
         }
     else:
         metrics['inventory_units'] = {"value": "N/A", "delta": None}

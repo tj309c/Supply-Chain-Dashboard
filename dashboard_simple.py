@@ -32,6 +32,8 @@ from pages.overview_page import render_overview_page
 from pages.service_level_page import render_service_level_page
 from pages.inventory_page import render_inventory_page
 from pages.backorder_page import render_backorder_page
+from pages.inbound_page import render_inbound_page
+from pages.forecast_page import render_forecast_page
 from pages.debug_page import render_debug_page
 
 # ===== PAGE CONFIGURATION =====
@@ -172,27 +174,45 @@ def load_all_data():
 def main():
     """Main application entry point"""
 
-    # Sidebar header
+    # ===== SIDEBAR: HEADER =====
     st.sidebar.title("🏭 POP Supply Chain")
-    st.sidebar.caption("EssilorLuxottica Platform")
+    st.sidebar.caption("EssilorLuxottica Platform v2.0")
     st.sidebar.divider()
 
-    # Simple selectbox navigation
-    pages = {
+    # ===== SIDEBAR: NAVIGATION =====
+    st.sidebar.header("📍 Navigation")
+
+    # Organize pages into logical groups
+    core_pages = {
         "📊 Overview": "overview",
         "🚚 Service Level": "service_level",
         "⚠️ Backorders": "backorders",
-        "📦 Inventory": "inventory",
+        "📦 Inventory": "inventory"
+    }
+
+    future_pages = {
         "📈 Forecasting": "forecasting",
-        "🚛 Inbound Logistics": "inbound",
+        "🚛 Inbound Logistics": "inbound"
+    }
+
+    utility_pages = {
         "🔧 Debug & Logs": "debug"
     }
 
-    selected_label = st.sidebar.selectbox("Navigate to:", list(pages.keys()))
-    selected_page = pages[selected_label]
+    # Combine all pages for selectbox
+    all_pages = {**core_pages, **future_pages, **utility_pages}
+
+    selected_label = st.sidebar.selectbox(
+        "Select Page",
+        options=list(all_pages.keys()),
+        help="Navigate between different supply chain modules",
+        label_visibility="collapsed"
+    )
+    selected_page = all_pages[selected_label]
 
     st.sidebar.divider()
 
+    # ===== SIDEBAR: DATA LOADING =====
     # Load data
     with st.spinner("Loading data..."):
         data = load_all_data()
@@ -201,17 +221,32 @@ def main():
         st.error("Failed to load data. Please check your data files.")
         st.stop()
 
-    # Data status in sidebar
-    st.sidebar.caption("📊 Data Status")
-    st.sidebar.caption(f"Last Updated: {data['load_time'].strftime('%H:%M:%S')}")
+    # ===== SIDEBAR: SYSTEM STATUS =====
+    st.sidebar.header("📊 System Status")
+
+    # Calculate metrics
     total_records = len(data['service']) + len(data['backorder']) + len(data['inventory'])
-    st.sidebar.caption(f"Records: {total_records:,}")
+
+    # Display status as metrics for better visibility
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.metric(
+            label="Last Updated",
+            value=data['load_time'].strftime('%H:%M'),
+            help="Time when data was last loaded from source files"
+        )
+    with col2:
+        st.metric(
+            label="Total Records",
+            value=f"{total_records:,}",
+            help="Combined count of service, backorder, and inventory records"
+        )
 
     st.sidebar.divider()
 
-    # Quick actions
+    # ===== SIDEBAR: QUICK ACTIONS =====
     st.sidebar.header("⚡ Quick Actions")
-    if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
+    if st.sidebar.button("🔄 Refresh Data", use_container_width=True, help="Clear cache and reload all data from source files"):
         st.cache_data.clear()
         st.rerun()
 
@@ -233,12 +268,10 @@ def main():
         render_inventory_page(inventory_data=data['inventory_analysis'])
 
     elif selected_page == "forecasting":
-        st.title("📈 Forecasting")
-        st.info("Forecasting page coming soon - easy to add!")
+        render_forecast_page(orders_data=None, deliveries_data=None, master_data=None)
 
     elif selected_page == "inbound":
-        st.title("🚛 Inbound Logistics")
-        st.info("Inbound logistics page coming soon - easy to add!")
+        render_inbound_page(inbound_data=None)
 
     elif selected_page == "debug":
         render_debug_page(debug_info=data)

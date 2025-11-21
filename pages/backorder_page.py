@@ -431,44 +431,38 @@ def render_backorder_page(backorder_data):
     metrics = calculate_backorder_metrics(backorder_data)
 
     # Display KPIs
-    kpi_data = [
-        {
-            "label": "Total Orders",
+    kpi_data = {
+        "Total Orders": {
             "value": f"{metrics['total_orders']:,}",
             "delta": None,
             "help": "**Business Logic:** Count of distinct sales orders with unfulfilled backorder quantity. Formula: COUNT(DISTINCT sales_order WHERE backorder_qty > 0)"
         },
-        {
-            "label": "Total Units",
+        "Total Units": {
             "value": f"{metrics['total_units']:,}",
             "delta": None,
             "help": "**Business Logic:** Sum of all backorder quantities across all open orders. Represents total units awaiting fulfillment. Formula: SUM(backorder_qty)"
         },
-        {
-            "label": "Unique SKUs",
+        "Unique SKUs": {
             "value": f"{metrics['unique_skus']:,}",
             "delta": None,
             "help": "**Business Logic:** Count of distinct material numbers (SKUs) on backorder. Shows how many different products have unfulfilled demand. Formula: COUNT(DISTINCT sku WHERE backorder_qty > 0)"
         },
-        {
-            "label": "Unique Customers",
+        "Unique Customers": {
             "value": f"{metrics['unique_customers']:,}",
             "delta": None,
             "help": "**Business Logic:** Count of distinct customers with open backorders. Indicates breadth of backorder impact. Formula: COUNT(DISTINCT customer_name WHERE backorder_qty > 0)"
         },
-        {
-            "label": "Avg Age (days)",
+        "Avg Age (days)": {
             "value": f"{metrics['avg_age']:.1f}",
             "delta": "⚠️" if metrics['avg_age'] > 30 else None,
             "help": f"**Business Logic:** Average time backorders have been open. Days on Backorder = Today - Order Creation Date. Current average: {metrics['avg_age']:.1f} days. Formula: AVG(days_on_backorder) = AVG(TODAY - order_date)"
         },
-        {
-            "label": "Critical Orders",
+        "Critical Orders": {
             "value": f"{metrics['critical_orders']:,}",
             "delta": "❌" if metrics['critical_orders'] > 0 else None,
             "help": f"**Business Logic:** Count of orders on backorder for more than 30 days (critical threshold). These require immediate attention. Formula: COUNT(WHERE days_on_backorder >= 30)"
         }
-    ]
+    }
 
     render_kpi_row(kpi_data)
 

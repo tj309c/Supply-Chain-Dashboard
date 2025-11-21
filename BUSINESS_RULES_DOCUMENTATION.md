@@ -2,7 +2,7 @@
 
 Auto-generated documentation of all business rules and field definitions.
 
-**Generated:** 2025-11-21 16:01:30
+**Generated:** 2025-11-21 16:39:38
 
 ---
 
@@ -211,4 +211,27 @@ Auto-generated documentation of all business rules and field definitions.
 - **External**: Managed by vendor, not in direct control
 - **Unavailable**: Not available for use
 - **Unknown**: Status unclear, needs investigation
+
+### Alternate Codes Rules
+
+**Description:** Material code alternate/supersession mapping rules
+
+```python
+{'normalization': {'auto_normalize': True, 'normalize_inventory': True, 'normalize_demand': True, 'normalize_backorders': True, 'default_view': 'aggregated'}, 'display': {'show_alternate_codes': True, 'show_code_transition_dates': False, 'highlight_old_codes': True, 'max_alternates_display': 3}, 'alerts': {'alert_on_old_code_backorders': True, 'alert_on_split_inventory': True, 'alert_on_old_code_orders': True, 'critical_backorder_threshold': 0}, 'business_logic': {'recommend_code_update': True, 'prioritize_old_inventory_first': True, 'track_inventory_by_code': True, 'consolidate_reporting': True}, 'data_quality': {'flag_missing_current_codes': True, 'flag_circular_references': True, 'validate_code_hierarchy': True}}
+```
+
+**Alternate Codes Summary:**
+
+- Total SKU Families: 142
+- Total Old Codes: 143
+- Families with 2 codes: 141
+- Families with 3+ codes: 1
+
+**Business Impact:**
+
+- **Inventory Consolidation**: Automatically aggregates inventory across all alternate codes
+- **Historical Demand**: Combines demand history from old and current codes for accurate forecasting
+- **Backorder Alerts**: Flags backorders on old codes when inventory exists on current code
+- **Code Migration**: Recommends updating orders from old codes to current codes
+- **Reporting**: All reports consolidate data under current/active material codes
 
