@@ -811,7 +811,393 @@ VENDOR_RULES = {
 
 ---
 
-### 2.7 Demand Forecasting Module (Priority: MEDIUM)
+### 2.7 Backorder Intelligence & Predictive Analytics (Priority: HIGH)
+**Status**: IN PROGRESS - Enhanced backorder analytics with vendor integration
+
+**Objectives**:
+- Integrate vendor PO data to calculate expected backorder relief dates
+- Predict stockout risk before backorders occur using demand and safety stock
+- Enhanced prioritization using vendor reliability and customer impact
+- Root cause analysis to identify systemic backorder issues
+- Provide actionable intelligence for backorder resolution
+
+**Data Integration**:
+- Primary: Backorder data, Vendor POs, Inbound receipts, Vendor performance
+- Supporting: Inventory, Deliveries (demand), Master Data
+- Links to: Vendor Module (PO relief), Inventory Module (at-risk prediction)
+
+---
+
+#### 2.7.1 PO Relief Date Integration (Week 1 - PRIORITY 1)
+
+**Objectives**:
+- Link backorders to expected vendor PO deliveries
+- Calculate vendor-adjusted relief dates based on historical performance
+- Show "Days Until Relief" for each backorder
+- Identify backorders with NO PO coverage (critical gap)
+
+**Core Features**:
+```
+✓ PO-to-Backorder Matching
+  - Match by SKU to find relieving POs
+  - Handle multiple POs per SKU (prioritize nearest delivery)
+  - Flag backorders with no matching PO
+
+✓ Vendor-Adjusted Delivery Dates
+  - Expected Relief Date = PO Expected Delivery + Vendor Avg Delay
+  - Use vendor OTIF % and average delay days from vendor_performance
+  - Confidence scoring: High (>90% OTIF), Medium (75-90%), Low (<75%)
+
+✓ Relief Timeline Visualization
+  - Gantt-style timeline showing when backorders clear
+  - Color-coded by confidence (Green/Yellow/Red)
+  - Group by: This Week, This Month, Next Month, No PO
+
+✓ New Metrics
+  - "Backorders with PO Coverage" (% with matching PO)
+  - "Avg Days Until Relief" (weighted average)
+  - "High-Risk Backorders" (unreliable vendor or no PO)
+  - "Backorders Relieving in Next 7/30 Days"
+```
+
+**Technical Implementation**:
+```python
+# New module: backorder_relief_analysis.py
+def calculate_backorder_relief_dates(backorder_df, vendor_pos_df, vendor_performance_df):
+    """
+    Match backorders to POs and calculate expected relief
+
+    Returns DataFrame with:
+    - All backorder fields
+    - relieving_po_number
+    - po_expected_delivery
+    - vendor_name
+    - vendor_otif_pct
+    - vendor_avg_delay_days
+    - vendor_adjusted_delivery_date
+    - days_until_relief
+    - relief_confidence ('High'/'Medium'/'Low')
+    - has_po_coverage (True/False)
+    """
+```
+
+**New Tab**: "📅 Relief Timeline & PO Tracking"
+
+**Tasks**:
+- [x] Create `backorder_relief_analysis.py` module
+- [x] Implement PO-to-backorder matching by SKU
+- [x] Calculate vendor-adjusted relief dates
+- [x] Add relief confidence scoring
+- [x] Create "Relief Timeline" tab with Gantt visualization
+- [x] Add new KPI metrics to overview tab (PO Coverage, Avg Days to Relief, High-Risk)
+- [ ] Update priority scoring to include days_until_relief (optional enhancement)
+
+**Implementation Notes**:
+- Created `backorder_relief_analysis.py` with full PO matching logic
+- Added `load_backorder_relief()` to data_loader.py
+- Integrated relief calculation into dashboard_simple.py (99% progress step)
+- Updated backorder_page.py with:
+  - 3 new KPI metrics (PO Coverage %, Avg Days to Relief, High-Risk count)
+  - New "📅 Relief Timeline & PO Tracking" tab with:
+    - Relief bucket distribution bar chart
+    - Relief confidence pie chart
+    - Vendor OTIF histogram
+    - Critical gaps table (backorders without PO or unreliable vendors)
+    - Gantt-style timeline visualization (next 60 days)
+    - Detailed relief schedule table
+- Relief data automatically filters with existing backorder page filters
+
+---
+
+#### 2.7.2 At-Risk Stockout Prediction (Week 2 - PRIORITY 2)
+
+**Objectives**:
+- Identify items likely to go on backorder BEFORE it happens
+- Calculate safety stock and reorder points per SKU
+- Predict "Days Until Stockout" based on current inventory and demand
+- Proactive alerts to prevent backorders
+
+**Core Features**:
+```
+✓ Demand Calculation
+  - Daily demand rate (30/60/90 day rolling averages)
+  - Demand standard deviation (for safety stock)
+  - Demand trend detection (growing/stable/declining)
+
+✓ Safety Stock & Reorder Point
+  - Safety Stock = Z-score × √(Avg Lead Time) × StdDev(Daily Demand)
+  - Reorder Point = (Daily Demand × Lead Time) + Safety Stock
+  - Service level target: 95% (Z-score = 1.65)
+
+✓ Stockout Risk Scoring
+  - Days Until Stockout = Current Stock / Daily Demand
+  - Risk Levels:
+    - Critical (0-7 days): Red flag
+    - High (7-14 days): Orange flag
+    - Moderate (14-30 days): Yellow flag
+  - Factor in open PO coverage and vendor reliability
+
+✓ At-Risk Dashboard
+  - Filter by risk level, category, SKU
+  - Sort by days until stockout
+  - Show recommended actions
+```
+
+**Technical Implementation**:
+```python
+# New module: stockout_prediction.py
+def predict_stockout_risk(inventory_df, deliveries_df, vendor_pos_df, vendor_performance_df):
+    """
+    Identify SKUs at risk of stockout
+
+    Calculates:
+    - Daily demand (multiple time windows)
+    - Demand variability
+    - Safety stock
+    - Reorder point
+    - Days until stockout
+    - PO coverage gap analysis
+    - Risk score (0-100)
+
+    Returns: DataFrame sorted by days_until_stockout
+    """
+```
+
+**New Tab**: "⚠️ At-Risk Stockout Prediction"
+
+**Tasks**:
+- [ ] Create `stockout_prediction.py` module
+- [ ] Implement daily demand calculation from deliveries
+- [ ] Calculate safety stock using statistical methods
+- [ ] Compute reorder points per SKU
+- [ ] Build stockout risk scoring algorithm
+- [ ] Create "At-Risk Stockout" tab
+- [ ] Add alerts to overview page for critical items
+
+---
+
+#### 2.7.3 Enhanced Priority Scoring (Week 3 - PRIORITY 3)
+
+**Objectives**:
+- Multi-factor backorder prioritization
+- Integrate vendor reliability, days until relief, customer value
+- More accurate priority ranking for action planning
+
+**Enhanced Priority Formula**:
+```python
+Priority Score = (
+    Age (20%) × Normalized Age +
+    Quantity (15%) × Normalized Qty +
+    Vendor Reliability (20%) × (1 - Vendor OTIF%) +
+    Days Until Relief (25%) × Normalized Days +
+    Customer Value (10%) × Customer Tier +
+    Product Margin (10%) × Margin %
+) × 100
+```
+
+**Vendor Reliability Scoring**:
+- No PO: 100 (highest priority)
+- PO from vendor <75% OTIF: 80
+- PO from vendor 75-90% OTIF: 50
+- PO from vendor >90% OTIF: 20
+
+**Days Until Relief Scoring**:
+- No PO: 100
+- Relief >60 days: 80
+- Relief 30-60 days: 60
+- Relief 7-30 days: 40
+- Relief <7 days: 20
+
+**Tasks**:
+- [ ] Update `calculate_priority_score()` in backorder_page.py
+- [ ] Add vendor reliability factor
+- [ ] Add days until relief factor
+- [ ] Implement customer value weighting (if data available)
+- [ ] Update priority display in tables
+- [ ] Adjust thresholds based on user feedback
+
+---
+
+#### 2.7.4 Backorder Root Cause Analysis (Week 3 - PRIORITY 4)
+
+**Objectives**:
+- Categorize each backorder by root cause
+- Identify systemic issues (e.g., poor forecasting, vendor delays)
+- Provide actionable recommendations per category
+
+**Root Cause Categories**:
+```
+1. Insufficient PO Coverage
+   - Backorder exists but NO open PO for SKU
+   - Action: Create PO immediately
+
+2. Vendor Delay
+   - PO exists but vendor late vs expected delivery
+   - Action: Escalate with vendor, consider backup
+
+3. Demand Spike
+   - Recent demand >50% above historical avg
+   - Action: Review forecast, increase safety stock
+
+4. Poor Forecasting
+   - SKU has recurring backorders (3+ in 6 months)
+   - Action: Adjust reorder point, review demand model
+
+5. Long Vendor Lead Time
+   - Vendor lead time >60 days
+   - Action: Find faster supplier, increase order frequency
+
+6. Safety Stock Too Low
+   - Stockout despite PO coverage (demand variability issue)
+   - Action: Recalculate safety stock with higher service level
+```
+
+**Visualization**:
+- Root cause pie chart
+- Top 10 SKUs by root cause category
+- Vendor contribution to each root cause
+
+**New Section**: "🔍 Root Cause Analysis" (expander in Overview tab)
+
+**Tasks**:
+- [ ] Implement root cause categorization logic
+- [ ] Create pie chart visualization
+- [ ] Add root cause column to backorder tables
+- [ ] Generate recommended actions per category
+- [ ] Track root cause trends over time
+
+---
+
+#### 2.7.5 Demand-Based Insights (Week 4 - PRIORITY 5)
+
+**Objectives**:
+- Calculate backorder impact using demand metrics
+- Customer impact scoring
+- SKU criticality assessment
+
+**New Calculations**:
+```python
+# Demand Coverage Gap
+Days of Demand Backordered = Backorder Qty / Daily Demand
+Lost Sales Risk = Days on Backorder × Daily Demand × Cancel Probability
+
+# Customer Impact Score
+Customer Impact = (
+    Total Demand (90 days) +
+    Number SKUs on Backorder +
+    Total Days on Backorder
+)
+
+# SKU Criticality
+SKU Criticality = (
+    Number Customers Affected +
+    Order Frequency (orders/month) +
+    Demand Trend Coefficient
+)
+```
+
+**New Metrics**:
+- "Customer-Days Lost" (sum of customers × days on backorder)
+- "Backorder as % of Monthly Demand"
+- "Customers with Multiple Backorders"
+
+**Tasks**:
+- [ ] Implement demand-based calculations
+- [ ] Add customer impact scoring
+- [ ] Create SKU criticality ranking
+- [ ] Add new metrics to KPI row
+- [ ] Create customer impact table
+
+---
+
+#### 2.7.6 Vendor Performance Impact (Week 4 - PRIORITY 6)
+
+**Objectives**:
+- Cross-reference backorders with vendor performance
+- Identify vendors causing most backorder pain
+- Alternative vendor recommendations
+
+**Vendor Backorder Analytics**:
+```python
+Vendor Backorder Score = (
+    Count of backorders linked to vendor's late POs +
+    Total units on backorder due to vendor +
+    Average days late per vendor
+)
+```
+
+**Features**:
+- "Top 5 Vendors Causing Backorders" table
+- "Backorder Units by Vendor" bar chart
+- "Average Vendor Delay Days" comparison
+- Alternative vendor suggestions with better OTIF
+
+**Tasks**:
+- [ ] Calculate vendor contribution to backorders
+- [ ] Create vendor backorder scorecards
+- [ ] Build alternative vendor recommendation engine
+- [ ] Add vendor performance section to backorder page
+- [ ] Link to vendor page for drill-down
+
+---
+
+### Implementation Roadmap
+
+**Week 1: PO Relief Integration** ⭐ START HERE
+```
+Day 1-2: Create backorder_relief_analysis.py module
+Day 3-4: Implement PO matching and vendor-adjusted dates
+Day 5: Build Relief Timeline tab and visualizations
+Day 6: Add new metrics to overview
+Day 7: Testing and refinement
+```
+
+**Week 2: At-Risk Stockout Prediction**
+```
+Day 1-2: Create stockout_prediction.py module
+Day 3-4: Implement demand calculations and safety stock
+Day 5: Build At-Risk Stockout tab
+Day 6-7: Add alerts and integrate with backorder page
+```
+
+**Week 3: Enhanced Prioritization & Root Cause**
+```
+Day 1-2: Update priority scoring algorithm
+Day 3-4: Implement root cause categorization
+Day 5: Create root cause visualizations
+Day 6-7: Testing and user feedback
+```
+
+**Week 4: Demand Insights & Vendor Impact**
+```
+Day 1-3: Implement demand-based calculations
+Day 4-5: Build vendor backorder analytics
+Day 6-7: Final integration and polish
+```
+
+---
+
+### Success Metrics
+
+**Module Completion Criteria**:
+- [ ] PO relief dates calculated for all backorders with vendor adjustment
+- [ ] At-risk stockout prediction dashboard operational
+- [ ] Enhanced priority scoring deployed
+- [ ] Root cause analysis categorizing 100% of backorders
+- [ ] New KPI metrics integrated into overview
+- [ ] Unit tests for relief calculation (>80% coverage)
+- [ ] User documentation and training materials
+
+**Business Impact KPIs**:
+- **Backorder Visibility**: 100% of backorders show expected relief date
+- **Proactive Prevention**: Identify at-risk items 7-30 days before stockout
+- **Faster Resolution**: Reduce average days on backorder by 20%
+- **Better Prioritization**: Top 20% priority items aligned with business impact
+- **Vendor Accountability**: Track vendor contribution to backorder issues
+
+---
+
+### 2.8 Demand Forecasting Module (Priority: MEDIUM)
 **Status**: Placeholder exists, needs full implementation
 
 **Objectives**:
@@ -844,6 +1230,136 @@ VENDOR_RULES = {
 - [ ] Add forecast vs actual comparison
 - [ ] Integrate forecast into inventory planning
 - [ ] Build forecast accuracy dashboard
+
+---
+
+**TBD - Future Enhancement: Hybrid Forecasting Approach**
+
+**Objectives**:
+Provide users with flexible forecasting options to balance ease-of-use, accuracy, and business logic through a dual-mode forecasting system.
+
+**Forecast Mode 1: Traditional Statistical Forecasting (Default)**
+```
+Primary approach for ease of implementation and analysis
+- Time series decomposition (trend, seasonality, residual)
+- Moving averages (simple, weighted, exponential)
+- Exponential smoothing (Holt-Winters)
+- ARIMA models for complex patterns
+- Seasonal adjustment factors
+
+Recommended Tools (Easiest to Implement):
+- Python statsmodels library (ARIMA, Holt-Winters, seasonal decomposition)
+- SciPy for trend analysis
+- Pandas rolling/expanding windows for moving averages
+- Prophet (Facebook) for automated time series forecasting with seasonality
+- Simple exponential smoothing for baseline forecasts
+
+Benefits:
+- Quick to implement with minimal data requirements
+- Interpretable results for stakeholders
+- Widely accepted statistical methods
+- Good for SKUs with stable demand patterns
+```
+
+**Forecast Mode 2: Deterministic with Statistical Layer (Toggle Option)**
+```
+Hybrid approach combining business logic with statistical refinement
+- Base Layer: Deterministic business rules and known drivers
+  - Promotional calendars and planned events
+  - Product lifecycle stages (launch, growth, maturity, decline)
+  - Customer order patterns and committed volumes
+  - Market intelligence and external factors
+  - Vendor lead times and order minimums
+
+- Statistical Overlay Layer:
+  - Error correction using historical forecast accuracy
+  - Variance bands and confidence intervals
+  - Demand smoothing to reduce noise
+  - Outlier detection and adjustment
+  - Bias correction (consistent over/under forecasting)
+  - Seasonality adjustment on top of base forecast
+
+Benefits:
+- Incorporates business knowledge and planned activities
+- More accurate for new products, promotions, lifecycle changes
+- Provides confidence intervals for risk assessment
+- Adjusts deterministic inputs with statistical reality
+```
+
+**Implementation Strategy**:
+```python
+# Future module structure
+def generate_forecast(sku, mode='statistical'):
+    """
+    Main forecasting function with mode toggle
+
+    Parameters:
+    - sku: SKU identifier
+    - mode: 'statistical' or 'deterministic_hybrid'
+    """
+    if mode == 'statistical':
+        return statistical_forecast(sku)
+    elif mode == 'deterministic_hybrid':
+        base_forecast = deterministic_forecast(sku)
+        return apply_statistical_layer(base_forecast, sku)
+
+def statistical_forecast(sku):
+    """Traditional statistical methods"""
+    # Moving averages, exponential smoothing, ARIMA, Prophet
+
+def deterministic_forecast(sku):
+    """Business rule-based forecast"""
+    # Promotions, lifecycle, committed orders, market intel
+
+def apply_statistical_layer(base_forecast, sku):
+    """Apply statistical corrections to deterministic forecast"""
+    # Error correction, smoothing, confidence intervals, bias adjustment
+```
+
+**User Interface Toggle**:
+```
+┌─ Demand Forecast Settings ─────────────────────┐
+│                                                 │
+│ Forecast Mode:                                 │
+│ ○ Statistical Forecast (Default)               │
+│   └─ Uses time series analysis and historical  │
+│      patterns. Best for stable demand SKUs.    │
+│                                                 │
+│ ○ Deterministic + Statistical Hybrid           │
+│   └─ Combines business rules with statistical  │
+│      refinement. Best for promotional items    │
+│      and new products.                         │
+│                                                 │
+│ Forecast Horizon: [90] days                    │
+│ Confidence Level: [95]%                        │
+│                                                 │
+│ [Generate Forecast] [Export Results]           │
+└─────────────────────────────────────────────────┘
+```
+
+**Phase 1 Tasks (Statistical Mode)**:
+- [ ] Implement moving average forecasting (7/30/90 day)
+- [ ] Add exponential smoothing (single, double, triple)
+- [ ] Integrate statsmodels for ARIMA
+- [ ] Evaluate Prophet for automated forecasting
+- [ ] Build forecast accuracy metrics (MAPE, RMSE, MAE)
+- [ ] Create forecast visualization with confidence intervals
+
+**Phase 2 Tasks (Deterministic Hybrid Mode)** - TBD:
+- [ ] Define business rule inputs (promotions, lifecycle, etc.)
+- [ ] Build deterministic forecast engine
+- [ ] Implement statistical error correction layer
+- [ ] Add bias detection and adjustment
+- [ ] Create variance band calculation
+- [ ] Build comparative analysis (statistical vs hybrid)
+- [ ] User testing and refinement
+
+**Open Questions for Future Discussion**:
+- Which deterministic inputs are available? (promotions, customer commitments, market data)
+- What is the relative weight of deterministic vs statistical components?
+- How do we validate hybrid forecast accuracy vs pure statistical?
+- Should we automatically recommend mode based on SKU characteristics?
+- What are the governance rules for manual forecast overrides?
 
 ---
 

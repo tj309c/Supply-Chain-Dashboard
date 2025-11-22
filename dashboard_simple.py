@@ -24,6 +24,7 @@ from data_loader import (
     load_vendor_pos,
     load_inbound_data,
     load_vendor_performance,
+    load_backorder_relief,
 )
 
 # Import pricing analysis
@@ -182,6 +183,10 @@ def load_all_data(_progress_callback=None):
         update_progress(0.98, "Analyzing pricing and volume discounts...")
         logs_pricing, pricing_analysis_df, vendor_discount_summary_df = load_pricing_analysis(vendor_pos_df, inbound_df)
 
+        # Calculate backorder relief dates (99%)
+        update_progress(0.99, "Calculating backorder relief dates...")
+        logs_relief, backorder_relief_df = load_backorder_relief(backorder_data_df, vendor_pos_df, vendor_performance_df)
+
         # Finalizing (100%)
         update_progress(1.0, "Ready!")
 
@@ -190,6 +195,7 @@ def load_all_data(_progress_callback=None):
             'master': master_data_df,
             'service': service_data_df,
             'backorder': backorder_data_df,
+            'backorder_relief': backorder_relief_df,
             'inventory': inventory_data_df,
             'inventory_analysis': inventory_analysis_df,
             'vendor_pos': vendor_pos_df,
@@ -214,6 +220,7 @@ def load_all_data(_progress_callback=None):
             'inbound_logs': logs_inbound,
             'vendor_perf_logs': logs_vendor_perf,
             'pricing_logs': logs_pricing,
+            'relief_logs': logs_relief,
 
             # Debug info - Errors
             'master_errors': errors_master,
@@ -346,7 +353,11 @@ def main():
         render_service_level_page(service_data=data['service'])
 
     elif selected_page == "backorders":
-        render_backorder_page(backorder_data=data['backorder'], inventory_data=data['inventory'])
+        render_backorder_page(
+            backorder_data=data['backorder'],
+            backorder_relief_data=data['backorder_relief'],
+            inventory_data=data['inventory']
+        )
 
     elif selected_page == "inventory":
         render_inventory_page(inventory_data=data['inventory_analysis'])

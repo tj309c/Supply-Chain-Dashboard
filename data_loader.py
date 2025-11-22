@@ -1250,6 +1250,10 @@ def load_vendor_performance(po_df, inbound_df):
     # Convert OTIF to percentage
     vendor_perf['otif_pct'] = vendor_perf['otif_pct'] * 100
 
+    # Calculate average delay days (positive = late, negative = early)
+    # Use lead time variance as proxy for delay
+    vendor_perf['avg_delay_days'] = vendor_perf['avg_lead_time_variance'].fillna(0).clip(lower=0)
+
     # Calculate composite vendor score (simple weighted average for now)
     # OTIF (40%), Fill Rate (30%), Lead Time Consistency (30%)
     vendor_perf['vendor_score'] = (
@@ -1268,6 +1272,31 @@ def load_vendor_performance(po_df, inbound_df):
     logs.append(f"INFO: Calculated performance for {len(vendor_perf)} vendors.")
 
     return logs, vendor_perf
+
+
+def load_backorder_relief(backorder_df, vendor_pos_df, vendor_performance_df):
+    """
+    Calculate backorder relief dates by matching to vendor POs
+
+    Args:
+        backorder_df: Backorder data from load_backorder_data()
+        vendor_pos_df: Vendor PO data from load_vendor_pos()
+        vendor_performance_df: Vendor performance metrics from load_vendor_performance()
+
+    Returns:
+        tuple: (logs, backorder_relief_df)
+        - logs: List of processing messages
+        - backorder_relief_df: Enhanced backorder data with relief information
+    """
+    from backorder_relief_analysis import calculate_backorder_relief_dates
+
+    logs, backorder_relief_df = calculate_backorder_relief_dates(
+        backorder_df,
+        vendor_pos_df,
+        vendor_performance_df
+    )
+
+    return logs, backorder_relief_df
 
 
 # === BACKWARD COMPATIBILITY WRAPPERS ===

@@ -523,6 +523,230 @@ def render_alternate_code_opportunities(backorder_data, inventory_data):
 
 # ===== TAB-SPECIFIC RENDER FUNCTIONS =====
 
+def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
+    """Render Relief Timeline & PO Tracking tab content"""
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from backorder_relief_analysis import get_critical_gaps, get_relief_timeline_data
+
+    st.subheader("PO Relief Timeline & Vendor Tracking")
+
+    if backorder_relief_data.empty:
+        st.info("No backorder relief data available")
+        return
+
+    # Top-level relief metrics
+    st.markdown("### Relief Overview")
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        render_info_box(
+            label="This Week",
+            value=f"{relief_metrics.get('relief_this_week', 0):,}",
+            icon="📅",
+            help_text="Backorders expected to be relieved within 7 days"
+        )
+
+    with col2:
+        render_info_box(
+            label="This Month",
+            value=f"{relief_metrics.get('relief_this_month', 0):,}",
+            icon="📆",
+            help_text="Backorders expected to be relieved within 30 days"
+        )
+
+    with col3:
+        render_info_box(
+            label="High Confidence",
+            value=f"{relief_metrics.get('high_confidence_count', 0):,}",
+            icon="✅",
+            help_text="Backorders with reliable vendors (OTIF ≥ 90%)"
+        )
+
+    with col4:
+        render_info_box(
+            label="No PO Coverage",
+            value=f"{relief_metrics.get('no_po_count', 0):,}",
+            icon="⚠️",
+            help_text="Backorders without matching purchase orders"
+        )
+
+    st.divider()
+
+    # Relief Bucket Distribution
+    st.markdown("### Relief Timeline Distribution")
+
+    bucket_counts = backorder_relief_data['relief_bucket'].value_counts()
+    bucket_order = ['Overdue', 'This Week', 'This Month', 'Next Month', '60+ Days', 'No PO']
+    bucket_counts = bucket_counts.reindex(bucket_order, fill_value=0)
+
+    # Create bar chart for relief buckets
+    fig_buckets = go.Figure()
+    colors = ['#dc3545', '#28a745', '#17a2b8', '#ffc107', '#6c757d', '#f8f9fa']
+
+    fig_buckets.add_trace(go.Bar(
+        x=bucket_counts.index,
+        y=bucket_counts.values,
+        marker_color=colors,
+        text=bucket_counts.values,
+        textposition='auto',
+    ))
+
+    fig_buckets.update_layout(
+        title="Backorders by Expected Relief Timeline",
+        xaxis_title="Relief Timeline",
+        yaxis_title="Number of Backorders",
+        height=350,
+        showlegend=False
+    )
+
+    st.plotly_chart(fig_buckets, use_container_width=True)
+
+    st.divider()
+
+    # Relief Confidence Distribution
+    st.markdown("### Relief Confidence Analysis")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Confidence pie chart
+        confidence_counts = backorder_relief_data['relief_confidence'].value_counts()
+        fig_confidence = px.pie(
+            values=confidence_counts.values,
+            names=confidence_counts.index,
+            title="Relief Confidence Breakdown",
+            color=confidence_counts.index,
+            color_discrete_map={
+                'High': '#28a745',
+                'Medium': '#ffc107',
+                'Low': '#dc3545',
+                'No PO': '#6c757d'
+            }
+        )
+        fig_confidence.update_layout(height=350)
+        st.plotly_chart(fig_confidence, use_container_width=True)
+
+    with col2:
+        # Vendor OTIF distribution for backorders with PO coverage
+        with_po = backorder_relief_data[backorder_relief_data['has_po_coverage'] == True]
+        if not with_po.empty:
+            fig_otif = px.histogram(
+                with_po,
+                x='vendor_otif_pct',
+                nbins=20,
+                title="Vendor OTIF Distribution (Backorders with PO)",
+                labels={'vendor_otif_pct': 'Vendor OTIF %', 'count': 'Number of Backorders'}
+            )
+            fig_otif.update_layout(height=350)
+            st.plotly_chart(fig_otif, use_container_width=True)
+        else:
+            st.info("No backorders with PO coverage")
+
+    st.divider()
+
+    # Critical Gaps - Backorders without PO or with unreliable vendors
+    st.markdown("### 🚨 Critical Gaps - Immediate Action Required")
+
+    critical_gaps = get_critical_gaps(backorder_relief_data, top_n=20)
+
+    if not critical_gaps.empty:
+        st.caption(f"Showing top {len(critical_gaps)} critical backorders requiring procurement attention")
+
+        display_cols = {
+            'sales_order': 'Sales Order',
+            'sku': 'SKU',
+            'customer_name': 'Customer',
+            'backorder_qty': 'BO Qty',
+            'days_on_backorder': 'Days Old',
+            'has_po_coverage': 'Has PO',
+            'vendor_name': 'Vendor',
+            'vendor_otif_pct': 'Vendor OTIF %',
+            'relief_confidence': 'Confidence',
+            'days_until_relief': 'Days to Relief'
+        }
+
+        # Select and format columns
+        display_df = critical_gaps[[col for col in display_cols.keys() if col in critical_gaps.columns]].copy()
+        display_df.columns = [display_cols[col] for col in display_df.columns]
+
+        # Format numeric columns
+        if 'Vendor OTIF %' in display_df.columns:
+            display_df['Vendor OTIF %'] = display_df['Vendor OTIF %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    else:
+        st.success("✅ No critical gaps - all backorders have reliable PO coverage")
+
+    st.divider()
+
+    # Relief Timeline - Gantt-style view
+    st.markdown("### 📅 Expected Relief Timeline (Next 60 Days)")
+
+    timeline_data = get_relief_timeline_data(backorder_relief_data)
+
+    if not timeline_data.empty:
+        # Filter to next 60 days only
+        timeline_60 = timeline_data[
+            (timeline_data['days_until_relief'] >= 0) &
+            (timeline_data['days_until_relief'] <= 60)
+        ].head(50)  # Limit to top 50 for readability
+
+        if not timeline_60.empty:
+            st.caption(f"Showing next {len(timeline_60)} backorders expected to be relieved in the next 60 days")
+
+            # Create Gantt-style chart
+            fig_gantt = px.scatter(
+                timeline_60,
+                x='vendor_adjusted_delivery_date',
+                y='sku',
+                size='backorder_qty',
+                color='relief_confidence',
+                hover_data=['sales_order', 'customer_name', 'vendor_name', 'days_until_relief'],
+                title="Expected Relief Dates by SKU",
+                color_discrete_map={
+                    'High': '#28a745',
+                    'Medium': '#ffc107',
+                    'Low': '#dc3545'
+                }
+            )
+
+            fig_gantt.update_layout(
+                height=max(400, len(timeline_60) * 15),
+                yaxis={'categoryorder': 'total ascending'}
+            )
+
+            st.plotly_chart(fig_gantt, use_container_width=True)
+
+            # Detailed table
+            st.markdown("#### Detailed Relief Schedule")
+
+            display_timeline_cols = {
+                'vendor_adjusted_delivery_date': 'Expected Relief Date',
+                'days_until_relief': 'Days Until Relief',
+                'sku': 'SKU',
+                'sales_order': 'Sales Order',
+                'customer_name': 'Customer',
+                'backorder_qty': 'BO Qty',
+                'vendor_name': 'Vendor',
+                'relieving_po_number': 'PO Number',
+                'relief_confidence': 'Confidence'
+            }
+
+            timeline_display = timeline_60[[col for col in display_timeline_cols.keys() if col in timeline_60.columns]].copy()
+            timeline_display.columns = [display_timeline_cols[col] for col in timeline_display.columns]
+
+            # Format date column
+            if 'Expected Relief Date' in timeline_display.columns:
+                timeline_display['Expected Relief Date'] = pd.to_datetime(timeline_display['Expected Relief Date']).dt.strftime('%Y-%m-%d')
+
+            st.dataframe(timeline_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("No backorders expected to be relieved in the next 60 days")
+    else:
+        st.info("No relief timeline data available (no backorders with PO coverage)")
+
+
 def render_overview_analysis_tab(filtered_data):
     """Render Overview & Analysis tab content"""
     st.subheader("Backorder Analysis Overview")
@@ -629,13 +853,19 @@ def render_fulfillment_opportunities_tab(filtered_data, inventory_data):
 
 # ===== MAIN RENDER FUNCTION =====
 
-def render_backorder_page(backorder_data, inventory_data=None):
-    """Main render function for backorder page with tabbed interface"""
+def render_backorder_page(backorder_data, backorder_relief_data=None, inventory_data=None):
+    """Main render function for backorder page with tabbed interface
+
+    Args:
+        backorder_data: Base backorder dataframe
+        backorder_relief_data: Enhanced backorder data with PO relief information
+        inventory_data: Inventory data for alternate code fulfillment analysis
+    """
 
     render_page_header(
         "Backorder Management",
         icon="⚠️",
-        subtitle="Track and analyze open backorders with aging analysis and priority ranking"
+        subtitle="Track and analyze open backorders with aging analysis, priority ranking, and PO relief tracking"
     )
 
     # Render sidebar settings
@@ -650,6 +880,12 @@ def render_backorder_page(backorder_data, inventory_data=None):
 
     # Calculate metrics
     metrics = calculate_backorder_metrics(backorder_data)
+
+    # Calculate relief metrics if available
+    relief_metrics = {}
+    if backorder_relief_data is not None and not backorder_relief_data.empty:
+        from backorder_relief_analysis import get_relief_summary_metrics
+        relief_metrics = get_relief_summary_metrics(backorder_relief_data)
 
     # Display KPIs (shown at top level, above tabs)
     kpi_data = {
@@ -684,6 +920,24 @@ def render_backorder_page(backorder_data, inventory_data=None):
             "help": f"**Business Logic:** Count of orders on backorder for more than 30 days (critical threshold). These require immediate attention. Formula: COUNT(WHERE days_on_backorder >= 30)"
         }
     }
+
+    # Add relief metrics if available
+    if relief_metrics:
+        kpi_data["PO Coverage"] = {
+            "value": f"{relief_metrics['po_coverage_pct']:.1f}%",
+            "delta": "✅" if relief_metrics['po_coverage_pct'] >= 80 else "⚠️",
+            "help": f"**Business Logic:** Percentage of backorders with matching vendor POs. Indicates supply chain responsiveness. {relief_metrics['po_coverage_count']} of {relief_metrics['total_backorders']} backorders have PO coverage. Formula: (COUNT(backorders WITH open PO) / COUNT(total backorders)) * 100"
+        }
+        kpi_data["Avg Days to Relief"] = {
+            "value": f"{relief_metrics['avg_days_until_relief']:.1f}",
+            "delta": "⚠️" if relief_metrics['avg_days_until_relief'] > 30 else None,
+            "help": f"**Business Logic:** Average days until backorders are expected to be fulfilled based on vendor-adjusted PO delivery dates. Only includes backorders with PO coverage. Formula: AVG(vendor_adjusted_delivery_date - TODAY) WHERE has_po_coverage = TRUE"
+        }
+        kpi_data["High-Risk"] = {
+            "value": f"{relief_metrics['high_risk_count']:,}",
+            "delta": "❌" if relief_metrics['high_risk_count'] > 0 else None,
+            "help": f"**Business Logic:** Backorders with no PO coverage OR unreliable vendor (OTIF < 75%). These require immediate procurement action. Formula: COUNT(WHERE has_po_coverage = FALSE OR vendor_otif_pct < 75)"
+        }
 
     render_kpi_row(kpi_data)
 
@@ -721,25 +975,54 @@ def render_backorder_page(backorder_data, inventory_data=None):
     st.divider()
 
     # Tabbed Interface
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tabs_list = [
         "📊 Overview & Analysis",
         "🚨 Critical Backorders",
         "📋 All Backorders",
         "📈 Summaries",
         "🔄 Fulfillment Opportunities"
-    ])
+    ]
+
+    # Add Relief Timeline tab if relief data is available
+    if backorder_relief_data is not None and not backorder_relief_data.empty:
+        tabs_list.insert(1, "📅 Relief Timeline & PO Tracking")
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(tabs_list)
+    else:
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
 
     with tab1:
         render_overview_analysis_tab(filtered_data)
 
-    with tab2:
-        render_critical_backorders_tab(filtered_data)
+    # Relief Timeline tab (conditional - only if relief data available)
+    if backorder_relief_data is not None and not backorder_relief_data.empty:
+        with tab2:
+            # Apply same filters to relief data
+            if 'sku' in filter_values and filter_values['sku']:
+                filtered_relief_data = backorder_relief_data[backorder_relief_data['sku'].isin(filter_values['sku'])]
+            else:
+                filtered_relief_data = backorder_relief_data.copy()
+            render_relief_timeline_tab(filtered_relief_data, relief_metrics)
 
-    with tab3:
-        render_all_backorders_tab(filtered_data)
+        with tab3:
+            render_critical_backorders_tab(filtered_data)
 
-    with tab4:
-        render_summaries_tab(filtered_data)
+        with tab4:
+            render_all_backorders_tab(filtered_data)
 
-    with tab5:
-        render_fulfillment_opportunities_tab(filtered_data, inventory_data)
+        with tab5:
+            render_summaries_tab(filtered_data)
+
+        with tab6:
+            render_fulfillment_opportunities_tab(filtered_data, inventory_data)
+    else:
+        with tab2:
+            render_critical_backorders_tab(filtered_data)
+
+        with tab3:
+            render_all_backorders_tab(filtered_data)
+
+        with tab4:
+            render_summaries_tab(filtered_data)
+
+        with tab5:
+            render_fulfillment_opportunities_tab(filtered_data, inventory_data)
