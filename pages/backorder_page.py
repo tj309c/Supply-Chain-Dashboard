@@ -521,14 +521,121 @@ def render_alternate_code_opportunities(backorder_data, inventory_data):
         st.success("✅ No old code backorder opportunities - all backorders are on current codes or no inventory available")
 
 
+# ===== TAB-SPECIFIC RENDER FUNCTIONS =====
+
+def render_overview_analysis_tab(filtered_data):
+    """Render Overview & Analysis tab content"""
+    st.subheader("Backorder Analysis Overview")
+
+    # Visualizations
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        aging_chart = render_aging_distribution_chart(filtered_data)
+        if aging_chart:
+            render_chart(aging_chart, height=350)
+
+    with col2:
+        customer_chart = render_top_customers_chart(filtered_data)
+        if customer_chart:
+            render_chart(customer_chart, height=350)
+
+    with col3:
+        category_chart = render_category_breakdown_chart(filtered_data)
+        if category_chart:
+            render_chart(category_chart, height=350)
+
+def render_critical_backorders_tab(filtered_data):
+    """Render Critical Backorders tab content"""
+    st.subheader("🚨 Critical Backorders (Highest Priority)")
+
+    critical_backorders = filtered_data.nlargest(20, 'priority_score')
+
+    if not critical_backorders.empty:
+        display_cols = [
+            'sales_order', 'sku', 'product_name', 'customer_name', 'backorder_qty',
+            'days_on_backorder', 'category', 'priority_score', 'order_date'
+        ]
+        display_cols = [col for col in display_cols if col in critical_backorders.columns]
+
+        render_data_table(
+            critical_backorders[display_cols],
+            title="Top 20 Priority Backorders",
+            height=400
+        )
+    else:
+        st.info("No critical backorders")
+
+def render_all_backorders_tab(filtered_data):
+    """Render All Backorders tab content"""
+    st.subheader("📋 All Backorders (Filtered)")
+
+    display_cols = [
+        'sales_order', 'sku', 'product_name', 'customer_name', 'backorder_qty',
+        'days_on_backorder', 'category', 'sales_org', 'order_type', 'priority_score', 'order_date'
+    ]
+    display_cols = [col for col in display_cols if col in filtered_data.columns]
+
+    # Sort by priority score descending
+    filtered_data_sorted = filtered_data.sort_values('priority_score', ascending=False)
+
+    render_data_table(
+        filtered_data_sorted[display_cols],
+        title=f"All Backorders ({len(filtered_data):,} orders)",
+        height=500
+    )
+
+def render_summaries_tab(filtered_data):
+    """Render Summaries tab content"""
+    st.subheader("📊 Backorder Summaries")
+
+    # Summary by Customer
+    st.markdown("#### By Customer")
+    customer_summary = filtered_data.groupby('customer_name').agg({
+        'backorder_qty': 'sum',
+        'sales_order': 'count',
+        'days_on_backorder': 'mean'
+    }).reset_index().sort_values('backorder_qty', ascending=False)
+
+    customer_summary.columns = ['Customer', 'Total Units', 'Order Count', 'Avg Age (days)']
+    customer_summary['Avg Age (days)'] = customer_summary['Avg Age (days)'].round(1)
+
+    st.dataframe(customer_summary, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Summary by SKU
+    st.markdown("#### By SKU")
+    sku_summary = filtered_data.groupby(['sku', 'product_name']).agg({
+        'backorder_qty': 'sum',
+        'sales_order': 'count',
+        'days_on_backorder': 'mean'
+    }).reset_index().sort_values('backorder_qty', ascending=False)
+
+    sku_summary.columns = ['SKU', 'Product Name', 'Total Units', 'Order Count', 'Avg Age (days)']
+    sku_summary['Avg Age (days)'] = sku_summary['Avg Age (days)'].round(1)
+
+    st.dataframe(sku_summary, use_container_width=True, hide_index=True)
+
+def render_fulfillment_opportunities_tab(filtered_data, inventory_data):
+    """Render Fulfillment Opportunities tab content"""
+    st.subheader("🔄 Alternate Code Fulfillment Opportunities")
+
+    if inventory_data is None or inventory_data.empty:
+        st.info("Inventory data not available for fulfillment opportunity analysis")
+        return
+
+    render_alternate_code_opportunities(filtered_data, inventory_data)
+
 # ===== MAIN RENDER FUNCTION =====
 
 def render_backorder_page(backorder_data, inventory_data=None):
-    """Main render function for backorder page"""
+    """Main render function for backorder page with tabbed interface"""
 
     render_page_header(
-        "⚠️ Backorder Management",
-        "Track and analyze open backorders with aging analysis and priority ranking"
+        "Backorder Management",
+        icon="⚠️",
+        subtitle="Track and analyze open backorders with aging analysis and priority ranking"
     )
 
     # Render sidebar settings
@@ -544,7 +651,7 @@ def render_backorder_page(backorder_data, inventory_data=None):
     # Calculate metrics
     metrics = calculate_backorder_metrics(backorder_data)
 
-    # Display KPIs
+    # Display KPIs (shown at top level, above tabs)
     kpi_data = {
         "Total Orders": {
             "value": f"{metrics['total_orders']:,}",
@@ -595,11 +702,6 @@ def render_backorder_page(backorder_data, inventory_data=None):
 
     st.caption(f"Showing {len(filtered_data):,} of {len(backorder_data):,} backorders")
 
-    # === ALTERNATE CODE OPPORTUNITIES (if inventory data available) ===
-    if inventory_data is not None:
-        render_alternate_code_opportunities(filtered_data, inventory_data)
-        st.divider()
-
     # Export button
     export_data = prepare_backorder_export_data(filtered_data, settings['export_section'], settings)
     if not export_data.empty:
@@ -616,92 +718,28 @@ def render_backorder_page(backorder_data, inventory_data=None):
         )
         st.sidebar.caption(f"📊 {len(export_data):,} rows ready to export")
 
-    # === VISUALIZATIONS ===
-    st.subheader("📊 Backorder Analysis")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        aging_chart = render_aging_distribution_chart(filtered_data)
-        if aging_chart:
-            render_chart(aging_chart, height=350)
-
-    with col2:
-        customer_chart = render_top_customers_chart(filtered_data)
-        if customer_chart:
-            render_chart(customer_chart, height=350)
-
-    with col3:
-        category_chart = render_category_breakdown_chart(filtered_data)
-        if category_chart:
-            render_chart(category_chart, height=350)
-
     st.divider()
 
-    # === CRITICAL BACKORDERS ===
-    st.subheader("🚨 Critical Backorders (Highest Priority)")
+    # Tabbed Interface
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Overview & Analysis",
+        "🚨 Critical Backorders",
+        "📋 All Backorders",
+        "📈 Summaries",
+        "🔄 Fulfillment Opportunities"
+    ])
 
-    critical_backorders = filtered_data.nlargest(20, 'priority_score')
+    with tab1:
+        render_overview_analysis_tab(filtered_data)
 
-    if not critical_backorders.empty:
-        display_cols = [
-            'sales_order', 'sku', 'product_name', 'customer_name', 'backorder_qty',
-            'days_on_backorder', 'category', 'priority_score', 'order_date'
-        ]
-        display_cols = [col for col in display_cols if col in critical_backorders.columns]
+    with tab2:
+        render_critical_backorders_tab(filtered_data)
 
-        render_data_table(
-            critical_backorders[display_cols],
-            title="Top 20 Priority Backorders",
-            height=400
-        )
-    else:
-        st.info("No critical backorders")
+    with tab3:
+        render_all_backorders_tab(filtered_data)
 
-    st.divider()
+    with tab4:
+        render_summaries_tab(filtered_data)
 
-    # === DETAILED BACKORDER TABLE ===
-    st.subheader("📋 All Backorders (Filtered)")
-
-    display_cols = [
-        'sales_order', 'sku', 'product_name', 'customer_name', 'backorder_qty',
-        'days_on_backorder', 'category', 'sales_org', 'order_type', 'priority_score', 'order_date'
-    ]
-    display_cols = [col for col in display_cols if col in filtered_data.columns]
-
-    # Sort by priority score descending
-    filtered_data_sorted = filtered_data.sort_values('priority_score', ascending=False)
-
-    render_data_table(
-        filtered_data_sorted[display_cols],
-        title=f"All Backorders ({len(filtered_data):,} orders)",
-        height=500
-    )
-
-    st.divider()
-
-    # === SUMMARY BY CUSTOMER ===
-    with st.expander("📊 Summary by Customer"):
-        customer_summary = filtered_data.groupby('customer_name').agg({
-            'backorder_qty': 'sum',
-            'sales_order': 'count',
-            'days_on_backorder': 'mean'
-        }).reset_index().sort_values('backorder_qty', ascending=False)
-
-        customer_summary.columns = ['Customer', 'Total Units', 'Order Count', 'Avg Age (days)']
-        customer_summary['Avg Age (days)'] = customer_summary['Avg Age (days)'].round(1)
-
-        st.dataframe(customer_summary, use_container_width=True, hide_index=True)
-
-    # === SUMMARY BY SKU ===
-    with st.expander("📊 Summary by SKU"):
-        sku_summary = filtered_data.groupby(['sku', 'product_name']).agg({
-            'backorder_qty': 'sum',
-            'sales_order': 'count',
-            'days_on_backorder': 'mean'
-        }).reset_index().sort_values('backorder_qty', ascending=False)
-
-        sku_summary.columns = ['SKU', 'Product Name', 'Total Units', 'Order Count', 'Avg Age (days)']
-        sku_summary['Avg Age (days)'] = sku_summary['Avg Age (days)'].round(1)
-
-        st.dataframe(sku_summary, use_container_width=True, hide_index=True)
+    with tab5:
+        render_fulfillment_opportunities_tab(filtered_data, inventory_data)

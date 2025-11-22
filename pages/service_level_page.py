@@ -89,8 +89,101 @@ def calculate_service_metrics(service_data):
         }
     }
 
+# ===== TAB-SPECIFIC RENDER FUNCTIONS =====
+
+def render_monthly_trends_tab(filtered_data):
+    """Render Monthly Trends tab content"""
+    st.subheader("Monthly Performance Trends")
+
+    if 'ship_month' not in filtered_data.columns:
+        st.info("No monthly data available")
+        return
+
+    monthly = filtered_data.groupby('ship_month').agg({
+        'on_time': ['sum', 'count'],
+        'units_issued': 'sum',
+        'days_to_deliver': 'mean'
+    }).reset_index()
+
+    monthly.columns = ['month', 'on_time_count', 'total_count', 'total_units', 'avg_days']
+    monthly['on_time_pct'] = (monthly['on_time_count'] / monthly['total_count'] * 100)
+    monthly = monthly.sort_values('month')
+
+    # Create dual-axis chart
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=monthly['month'],
+        y=monthly['total_count'],
+        name='Total Orders',
+        marker_color='lightblue',
+        yaxis='y'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=monthly['month'],
+        y=monthly['on_time_pct'],
+        name='On-Time %',
+        line=dict(color='green', width=3),
+        marker=dict(size=8),
+        yaxis='y2'
+    ))
+
+    fig.update_layout(
+        xaxis_title="Month",
+        yaxis=dict(title="Order Count", side='left'),
+        yaxis2=dict(title="On-Time %", overlaying='y', side='right', range=[0, 100]),
+        hovermode='x unified'
+    )
+
+    render_chart(fig, height=400)
+
+def render_customer_performance_tab(filtered_data):
+    """Render Customer Performance tab content"""
+    st.subheader("Customer Performance Breakdown")
+
+    if 'customer_name' not in filtered_data.columns:
+        st.info("No customer data available")
+        return
+
+    customer_summary = filtered_data.groupby('customer_name').agg({
+        'on_time': ['sum', 'count'],
+        'units_issued': 'sum',
+        'days_to_deliver': 'mean'
+    }).reset_index()
+
+    customer_summary.columns = ['Customer', 'On_Time_Count', 'Total_Orders', 'Total_Units', 'Avg_Days']
+    customer_summary['On_Time_%'] = (customer_summary['On_Time_Count'] / customer_summary['Total_Orders'] * 100).round(1)
+
+    # Select display columns
+    display_cols = ['Customer', 'Total_Orders', 'On_Time_%', 'Total_Units', 'Avg_Days']
+    customer_summary = customer_summary[display_cols].sort_values('Total_Orders', ascending=False)
+
+    render_data_table(
+        customer_summary,
+        max_rows=20,
+        downloadable=True,
+        download_filename="service_level_by_customer.csv"
+    )
+
+def render_detailed_records_tab(filtered_data):
+    """Render Detailed Records tab content"""
+    st.subheader("Detailed Delivery Records")
+
+    display_columns = ['customer_name', 'ship_month', 'units_issued', 'days_to_deliver', 'on_time']
+    available_cols = [col for col in display_columns if col in filtered_data.columns]
+
+    render_data_table(
+        filtered_data[available_cols],
+        max_rows=100,
+        downloadable=True,
+        download_filename="service_level_detail.csv"
+    )
+
+# ===== MAIN RENDER FUNCTION =====
+
 def render_service_level_page(service_data):
-    """Main service level page render function"""
+    """Main service level page render function with tabbed interface"""
 
     # Page header
     render_page_header(
@@ -114,91 +207,24 @@ def render_service_level_page(service_data):
         st.info("No data matches the selected filters")
         return
 
-    # Calculate and display metrics
+    # Calculate and display metrics (shown at top level, above tabs)
     metrics = calculate_service_metrics(filtered_data)
     render_kpi_row(metrics)
 
     st.divider()
 
-    # Monthly trend chart
-    if 'ship_month' in filtered_data.columns:
-        st.subheader("Monthly Performance Trend")
+    # Tabbed Interface
+    tab1, tab2, tab3 = st.tabs([
+        "📈 Monthly Trends",
+        "👥 Customer Performance",
+        "📋 Detailed Records"
+    ])
 
-        monthly = filtered_data.groupby('ship_month').agg({
-            'on_time': ['sum', 'count'],
-            'units_issued': 'sum',
-            'days_to_deliver': 'mean'
-        }).reset_index()
+    with tab1:
+        render_monthly_trends_tab(filtered_data)
 
-        monthly.columns = ['month', 'on_time_count', 'total_count', 'total_units', 'avg_days']
-        monthly['on_time_pct'] = (monthly['on_time_count'] / monthly['total_count'] * 100)
-        monthly = monthly.sort_values('month')
+    with tab2:
+        render_customer_performance_tab(filtered_data)
 
-        # Create dual-axis chart
-        fig = go.Figure()
-
-        fig.add_trace(go.Bar(
-            x=monthly['month'],
-            y=monthly['total_count'],
-            name='Total Orders',
-            marker_color='lightblue',
-            yaxis='y'
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=monthly['month'],
-            y=monthly['on_time_pct'],
-            name='On-Time %',
-            line=dict(color='green', width=3),
-            marker=dict(size=8),
-            yaxis='y2'
-        ))
-
-        fig.update_layout(
-            xaxis_title="Month",
-            yaxis=dict(title="Order Count", side='left'),
-            yaxis2=dict(title="On-Time %", overlaying='y', side='right', range=[0, 100]),
-            hovermode='x unified'
-        )
-
-        render_chart(fig, height=400)
-
-    st.divider()
-
-    # Customer performance table
-    if 'customer_name' in filtered_data.columns:
-        st.subheader("Customer Performance")
-
-        customer_summary = filtered_data.groupby('customer_name').agg({
-            'on_time': ['sum', 'count'],
-            'units_issued': 'sum',
-            'days_to_deliver': 'mean'
-        }).reset_index()
-
-        customer_summary.columns = ['Customer', 'On_Time_Count', 'Total_Orders', 'Total_Units', 'Avg_Days']
-        customer_summary['On_Time_%'] = (customer_summary['On_Time_Count'] / customer_summary['Total_Orders'] * 100).round(1)
-
-        # Select display columns
-        display_cols = ['Customer', 'Total_Orders', 'On_Time_%', 'Total_Units', 'Avg_Days']
-        customer_summary = customer_summary[display_cols].sort_values('Total_Orders', ascending=False)
-
-        render_data_table(
-            customer_summary,
-            max_rows=20,
-            downloadable=True,
-            download_filename="service_level_by_customer.csv"
-        )
-
-    st.divider()
-
-    # Detailed records
-    with st.expander("📋 View Detailed Records", expanded=False):
-        display_columns = ['customer_name', 'ship_month', 'units_issued', 'days_to_deliver', 'on_time']
-        available_cols = [col for col in display_columns if col in filtered_data.columns]
-
-        render_data_table(
-            filtered_data[available_cols],
-            max_rows=100,
-            downloadable=True,
-            download_filename="service_level_detail.csv"
-        )
+    with tab3:
+        render_detailed_records_tab(filtered_data)

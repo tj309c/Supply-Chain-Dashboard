@@ -450,39 +450,364 @@ Data Quality:
 
 ---
 
-### 2.6 Inbound Logistics Module (Priority: MEDIUM)
-**Status**: Data sources available, module needs creation
+### 2.6 Vendor & Procurement Dashboard Module (Priority: HIGH)
+**Status**: NEW - Data sources available, ready for development
 
 **Objectives**:
-- Track purchase orders from creation to receipt
-- Monitor supplier performance
-- Calculate and track lead times
-- Manage domestic inbound shipments
+- Comprehensive vendor performance management and scorecarding
+- Purchase order lifecycle tracking and visibility
+- Lead time analysis and variance monitoring
+- Pricing intelligence and cost analysis
+- At-risk PO identification and escalation
+- Support demand planning and reorder point calculations
 
 **Data Integration**:
-- Primary: Domestic Vendor POs.csv, DOMESTIC INBOUND.csv
-- Supporting: INVENTORY.csv (receipts), Master Data.csv
-- Links to: Backorder Module (expected relief), Inventory Module (incoming stock)
+- Primary: `Domestic Vendor POs.csv`, `DOMESTIC INBOUND.csv`
+- Supporting: `INVENTORY.csv` (receipts), `Master Data.csv`, `DELIVERIES.csv` (demand)
+- Links to: Backorder Module (expected relief), Inventory Module (incoming stock), Demand Planning (future)
 
-**Key Features**:
+---
+
+#### 2.6.1 Vendor Performance & Scorecarding
+
+**Core Features**:
 ```
-□ PO tracking (open, in-transit, received)
-□ Supplier on-time delivery metrics
-□ Lead time analysis by supplier and SKU
-□ Receipt variance tracking (ordered vs received)
-□ Inbound shipment status
-□ Supplier scorecarding
-□ PO aging and expedite recommendations
-□ Automated ETA updates for backorders
+□ Vendor scorecard with weighted metrics
+  - On-Time Delivery % (OTIF - On Time In Full)
+  - Lead time consistency (planned vs actual variance)
+  - Receipt accuracy (quantity/quality variance)
+  - Pricing competitiveness
+  - Response time to changes/inquiries
+
+□ Service level by vendor
+  - Rolling 30/60/90 day performance
+  - Trend analysis (improving/declining)
+  - Category-level breakdowns
+
+□ Lead time variance analysis
+  - Planned vs actual lead time tracking
+  - Variance by vendor, by SKU, by category
+  - Alert thresholds for excessive variance
+  - Historical lead time trends
+
+□ Vendor comparison & benchmarking
+  - Side-by-side vendor performance
+  - Best-in-class identification
+  - Vendor ranking by category
 ```
 
-**Technical Tasks**:
-- [ ] Create data loader for Vendor PO and Inbound data
-- [ ] Build inbound logistics page (`pages/inbound_page.py`)
-- [ ] Implement supplier performance metrics
-- [ ] Create PO tracking workflow
-- [ ] Link incoming POs to backorder relief dates
-- [ ] Build supplier scorecard with OTIF metrics
+**Open Questions**:
+- **Scoring Methodology**: What factors and weights for vendor scoring? (e.g., 40% OTIF, 30% lead time, 20% pricing, 10% quality)
+- **Performance Thresholds**: Define "good" vs "poor" vendor performance benchmarks
+- **Quality Metrics**: Do we have quality/defect data to include in scoring?
+
+---
+
+#### 2.6.2 Purchase Order Management
+
+**Core Features**:
+```
+□ PO lifecycle tracking
+  - Status: Created → Confirmed → Shipped → Received → Closed
+  - PO aging by status (open POs by age bucket)
+  - Timeline visualization per PO
+
+□ Open purchase orders dashboard
+  - Filter by vendor, SKU, date range, status
+  - Sort by urgency, value, age
+  - Export functionality
+
+□ At-risk PO identification
+  - Late POs (approaching delivery date but not shipped)
+  - Vendor reliability risk (poor historical performance)
+  - Extended lead time alerts
+  - Cross-reference with backorders for criticality
+
+□ Receipt variance analysis
+  - Ordered vs received quantity
+  - Ordered vs received value
+  - Variance by vendor (consistent over/under delivery)
+  - Root cause categorization
+
+□ PO expedite recommendations
+  - Automated flagging based on:
+    - Days until expected delivery
+    - Linked to critical backorders
+    - Vendor historical delays
+  - Escalation workflow tracking
+
+□ Abnormal purchase detection (SMART ALERTS)
+  - Over-purchasing vs demand/usage alerts:
+    - PO quantity >> recent demand/usage pattern
+    - SKU with no recent usage (dead stock risk)
+    - Order quantity exceeds X months of supply
+  - Pricing anomaly detection:
+    - Unit price significantly above historical average
+    - Price spike vs. recent PO pricing for same SKU
+    - Vendor pricing above competitor pricing
+  - Inventory duplication risk:
+    - Purchasing SKU with high existing on-hand inventory
+    - PO for SKU already on order (duplicate PO risk)
+  - Business rule violations:
+    - Ordering discontinued/expired SKUs
+    - Purchasing from non-preferred/low-scoring vendors
+```
+
+**Open Questions**:
+- **At-Risk Criteria**: Define specific thresholds (e.g., <7 days to delivery + not shipped = high risk)
+- **PO Status Tracking**: Do current data files include PO status, or do we infer from dates?
+
+---
+
+#### 2.6.3 Pricing Intelligence & Cost Analysis
+
+**Core Features**:
+```
+□ Pricing matrix analysis
+  - Vendor × SKU pricing grid
+  - Vendor × Time period trends
+  - Vendor × Order quantity (volume discounts)
+
+□ Price variance tracking
+  - Price changes over time by vendor/SKU
+  - Alert on significant price increases (>X%)
+  - Historical pricing trends
+
+□ Vendor comparison pricing
+  - Same SKU across multiple vendors
+  - Identify lowest cost supplier by SKU
+  - Total cost of ownership (price + lead time + reliability)
+
+□ Cost savings opportunities
+  - Alternative vendor recommendations
+  - Volume consolidation opportunities
+  - Price negotiation targets
+```
+
+**Open Questions**:
+- **Pricing Dimensions**: Which analysis dimensions are most valuable? (vendor×SKU, vendor×time, vendor×volume)
+- **Historical Pricing**: How far back should pricing history go?
+- **TCO Calculation**: Should we include holding costs, expedite fees, etc. in total cost?
+
+---
+
+#### 2.6.4 Strategic Procurement Insights
+
+**Core Features**:
+```
+□ Vendor concentration analysis
+  - % of total spend by vendor
+  - Dependency risk identification
+  - Diversification recommendations
+
+□ SKU sourcing analysis
+  - Single-source vs multi-source items
+  - Identify sole-source risks
+  - Backup vendor recommendations
+
+□ Capacity & volume analysis
+  - Vendor capacity tracking (if data available)
+  - Volume trends by vendor
+  - Forecast vs actual order volume
+
+□ Preferred vendor recommendations
+  - Best vendor by SKU/category based on composite score
+  - Alternative vendor suggestions
+  - New vendor evaluation framework
+```
+
+**Open Questions**:
+- **Vendor Capacity Data**: Do we have vendor capacity information, or should we infer from order patterns?
+- **Spend Data**: Is total spend per vendor available, or should we calculate from PO history?
+
+---
+
+#### 2.6.5 Integration with Demand Planning & Inventory
+
+**Future-Ready Features** (Phase 3):
+```
+□ Reorder point calculation inputs
+  - Expected receipt dates from open POs
+  - Vendor lead time data (avg, min, max)
+  - Lead time variability (for safety stock calc)
+
+□ Demand planning integration
+  - Vendor reliability metrics → safety stock adjustments
+  - Lead time data → reorder point timing
+  - Historical delivery patterns → forecast accuracy
+
+□ Backorder relief tracking
+  - Link open POs to specific backorders (by SKU)
+  - Calculate "days until backorder filled" (PO expected delivery - today)
+  - Display expected relief date on backorder page
+  - Prioritize backorders with incoming PO relief
+  - Automatic allocation on receipt (future)
+
+□ Inventory replenishment
+  - Suggested PO creation based on reorder points
+  - Vendor selection recommendations
+  - Order quantity optimization
+```
+
+**Open Questions**:
+- **Reorder Point Fields**: Which specific data points are needed for ROP calculations?
+- **Safety Stock Factors**: How should vendor reliability affect safety stock levels?
+- **Auto-Allocation Logic**: Should stock auto-allocate to backorders on receipt, or require manual confirmation?
+
+---
+
+#### 2.6.6 Operational Tools
+
+**Core Features**:
+```
+□ Delivery schedule compliance
+  - Planned vs actual delivery dates
+  - Schedule adherence % by vendor
+  - Delay pattern analysis
+
+□ Payment terms analysis
+  - Terms by vendor (Net 30, Net 60, etc.)
+  - Cash flow impact visibility
+  - Early payment discount opportunities
+
+□ Collaborative planning tools
+  - Shared forecast visibility (future)
+  - Vendor portal integration (future)
+  - Communication history tracking
+```
+
+---
+
+### Implementation Roadmap
+
+**Phase 1: Quick Wins (Weeks 1-2)** - START HERE
+```
+Priority: Easiest + Most Impactful
+
+1. PO Data Loader (HIGH IMPACT, MEDIUM EFFORT)
+   - Load Domestic Vendor POs.csv and DOMESTIC INBOUND.csv
+   - Basic data cleaning and validation
+   - Create unified PO dataset
+
+2. Open PO Dashboard (HIGH IMPACT, LOW EFFORT)
+   - Simple table view of open POs
+   - Filter by vendor, status, age
+   - Export to Excel
+   - Days-to-delivery calculation
+
+3. Vendor Service Level (HIGH IMPACT, LOW EFFORT)
+   - On-time delivery % by vendor
+   - Simple bar chart ranking
+   - 30/60/90 day rolling metrics
+
+4. At-Risk PO Alerts (HIGH IMPACT, LOW EFFORT)
+   - Flag POs approaching delivery date
+   - Highlight vendor with poor performance
+   - Link to backorders for criticality
+```
+
+**Phase 2: Analytics & Insights (Weeks 3-4)**
+```
+1. Lead Time Variance Analysis
+   - Planned vs actual lead time tracking
+   - Variance charts by vendor
+   - Alert configuration
+
+2. Vendor Scorecarding
+   - Weighted composite score
+   - Multi-factor performance evaluation
+   - Trend tracking
+
+3. Pricing Intelligence
+   - Pricing matrix (vendor × SKU)
+   - Historical price trends
+   - Vendor comparison tool
+```
+
+**Phase 3: Advanced Features (Weeks 5-6)**
+```
+1. Receipt Variance Analysis
+2. Strategic Sourcing Insights
+3. Demand Planning Integration
+4. Predictive Analytics
+```
+
+---
+
+### Technical Implementation
+
+**Data Loader Structure**:
+```python
+# data_loader.py additions
+def load_vendor_pos(po_path, file_key='vendor_pos'):
+    """Load vendor purchase order data"""
+    # Columns: PO Number, Vendor, SKU, Order Date, Expected Delivery,
+    #          Order Qty, Unit Price, PO Status, etc.
+
+def load_inbound_data(inbound_path, file_key='inbound'):
+    """Load inbound shipment/receipt data"""
+    # Columns: PO Number, Receipt Date, Received Qty, Receipt Status, etc.
+
+def load_vendor_performance(po_df, inbound_df, master_df):
+    """Calculate vendor performance metrics"""
+    # Join POs with receipts, calculate OTIF, lead time variance, etc.
+```
+
+**Page Structure**:
+```python
+# pages/vendor_page.py
+def render_vendor_page(vendor_data, po_data, inbound_data):
+    """Main vendor dashboard"""
+    # Tabs: Overview, Open POs, Vendor Scorecards, Pricing, At-Risk POs
+```
+
+**Business Rules**:
+```python
+# business_rules.py additions
+VENDOR_RULES = {
+    "scoring_weights": {
+        "otif": 0.40,           # On-time in-full delivery
+        "lead_time": 0.30,      # Lead time consistency
+        "pricing": 0.20,        # Price competitiveness
+        "quality": 0.10         # Quality/accuracy
+    },
+    "performance_thresholds": {
+        "excellent": 95,        # >= 95% = Excellent
+        "good": 85,            # >= 85% = Good
+        "acceptable": 75,      # >= 75% = Acceptable
+        "poor": 75             # < 75% = Poor
+    },
+    "at_risk_criteria": {
+        "days_until_delivery": 7,     # < 7 days = urgent
+        "vendor_otif_threshold": 80    # < 80% vendor OTIF = risky
+    },
+    "lead_time_variance": {
+        "acceptable_range": 0.15,      # ±15% variance acceptable
+        "alert_threshold": 0.25        # >25% variance = alert
+    }
+}
+```
+
+---
+
+### Success Metrics
+
+**Module Completion Criteria**:
+- [x] Vendor PO data successfully loaded and integrated
+- [ ] Open PO dashboard with filtering and export
+- [ ] Vendor service level (OTIF) calculation and visualization
+- [ ] At-risk PO identification and alerting
+- [ ] Lead time variance tracking
+- [ ] Vendor scorecard with composite scoring
+- [ ] Unit tests for vendor calculations (>80% coverage)
+- [ ] User documentation
+
+**Business Impact KPIs**:
+- **Vendor Performance**: Track OTIF % improvement over time
+- **At-Risk PO Reduction**: Reduce late POs by 20%+
+- **Cost Savings**: Identify pricing opportunities worth $X
+- **Lead Time Reduction**: Improve average lead time consistency by 15%
+- **Backorder Resolution**: Faster backorder relief through better PO visibility
 
 ---
 
@@ -773,6 +1098,34 @@ Each module is considered complete when it has:
 ---
 
 ## Recent Accomplishments (November 2025)
+
+### Latest Updates (November 21, 2025)
+
+**1. Performance Optimizations (✅ COMPLETED)**
+- Implemented real-time progress indicators for data loading (10-stage progress bar)
+- Added caching to expensive warehouse scrap calculations (`@st.cache_data(ttl=3600)`)
+- Optimized data loading with progress callback system (`_progress_callback` parameter)
+- Verified no performance regressions in existing data loaders
+- Dashboard now provides visual feedback during data loading phases
+
+**2. Executive Overview Enhancements (✅ COMPLETED)**
+- Fixed inventory value calculation showing $0 on overview page
+- Implemented proper calculation: `on_hand_qty × last_purchase_price × currency_conversion_rate`
+- Added support for EUR to USD conversion (rate: 1.111)
+- Verified all data relationships remain intact after fix
+- Created comprehensive verification tests (`test_inventory_value_fix.py`)
+
+**3. Inventory Analytics Improvements (✅ COMPLETED)**
+- Added weighted average month of supply to Executive Summary
+- Implemented value-weighted calculation: `Sum(MoS × inventory_value) / Sum(inventory_value)`
+- Enhanced warehouse scrap export with weighted MoS for Conservative, Medium, and Aggressive levels
+- Provides more accurate representation of inventory health by considering value
+
+**4. Quality Assurance**
+- Ran full pytest suite (72 tests: 25 passed, 47 pre-existing failures)
+- No new regressions introduced by recent changes
+- Created dedicated verification test suite for inventory value fix
+- All tests confirm data relationships intact and calculations accurate
 
 ### Major Milestones Achieved
 

@@ -63,23 +63,10 @@ def calculate_overview_metrics(service_data, backorder_data, inventory_data):
         total_stock = inventory_data['on_hand_qty'].sum() if 'on_hand_qty' in inventory_data.columns else 0
 
         # Calculate inventory value in USD
-        # Formula: on_hand_qty × last_purchase_price × currency_conversion_rate
-        if 'on_hand_qty' in inventory_data.columns and 'last_purchase_price' in inventory_data.columns:
-            # Create a copy to avoid SettingWithCopyWarning
-            inv_calc = inventory_data[['on_hand_qty', 'last_purchase_price', 'currency']].copy()
-
-            # Calculate value in original currency
-            inv_calc['value_orig_currency'] = inv_calc['on_hand_qty'] * inv_calc['last_purchase_price']
-
-            # Convert to USD based on currency
-            inv_calc['value_usd'] = inv_calc.apply(
-                lambda row: row['value_orig_currency'] * CURRENCY_RULES['conversion_rates'].get('EUR_to_USD', 1.0)
-                if row['currency'] == 'EUR'
-                else row['value_orig_currency'],
-                axis=1
-            )
-
-            total_value_usd = inv_calc['value_usd'].sum()
+        if 'total_value_usd' in inventory_data.columns:
+            total_value_usd = inventory_data['total_value_usd'].sum()
+        elif 'total_value' in inventory_data.columns:
+            total_value_usd = inventory_data['total_value'].sum() * CURRENCY_RULES['conversion_rates']['EUR_TO_USD']
         else:
             total_value_usd = 0
 

@@ -187,6 +187,11 @@ start_dashboard_dev.bat env ORDERS=data\ORDERS.csv MASTER="C:\custom\Master Data
 - Inventory turnover metrics
 - Stock-out risk analysis
 - Replenishment recommendations
+- **NEW:** 3-Level Data-Driven Scrap Recommendation System
+  - Conservative, Medium, and Aggressive scrap recommendations
+  - Based on SKU age, demand patterns, ABC classification, and PLM status
+  - Excludes SKUs < 1 year old (insufficient data)
+  - Older SKUs = more aggressive (higher confidence from more data points)
 
 ### 4. Inbound Logistics
 - Vendor PO tracking

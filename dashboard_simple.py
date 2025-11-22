@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
+import importlib
 from datetime import datetime
 
 # Import data loaders
@@ -20,7 +21,15 @@ from data_loader import (
     load_backorder_data,
     load_inventory_data,
     load_inventory_analysis_data,
+    load_vendor_pos,
+    load_inbound_data,
+    load_vendor_performance,
 )
+
+# Import pricing analysis
+import pricing_analysis as pricing_analysis_module
+importlib.reload(pricing_analysis_module)
+from pricing_analysis import load_pricing_analysis
 
 # Import UI components
 from ui_components import (
@@ -33,6 +42,9 @@ from pages.service_level_page import render_service_level_page
 from pages.inventory_page import render_inventory_page
 from pages.backorder_page import render_backorder_page
 from pages.sku_mapping_page import render_sku_mapping_page
+import pages.vendor_page as vendor_page_module
+importlib.reload(vendor_page_module)
+from pages.vendor_page import render_vendor_page
 from pages.data_upload_page import render_data_upload_page
 from pages.inbound_page import render_inbound_page
 from pages.forecast_page import render_forecast_page
@@ -49,6 +61,11 @@ st.set_page_config(
 # ===== CUSTOM CSS =====
 st.markdown("""
     <style>
+        /* Overall zoom level - 70% of normal size */
+        .main .block-container {
+            zoom: 0.7;
+        }
+
         /* Clean, professional styling */
         .main {
             padding: 1rem;
@@ -84,52 +101,89 @@ st.markdown("""
 
 # ===== DATA LOADING =====
 
-@st.cache_data(ttl=3600)
-def load_all_data():
-    """Load all data sources with caching using optimized unified pattern"""
+def load_all_data(_progress_callback=None):
+    """Load all data sources with caching using optimized unified pattern
+
+    Args:
+        _progress_callback: Optional callback function to report loading progress (underscore prefix = not hashed)
+    """
+    def update_progress(step, message):
+        """Helper to update progress if callback provided"""
+        if _progress_callback:
+            _progress_callback(step, message)
+
     try:
         # Define file paths
         MASTER_DATA_PATH = "Master Data.csv"
         ORDERS_PATH = "ORDERS.csv"
         DELIVERIES_PATH = "DELIVERIES.csv"
         INVENTORY_PATH = "INVENTORY.csv"
+        VENDOR_POS_PATH = "Domestic Vendor POs.csv"
+        INBOUND_PATH = "DOMESTIC INBOUND.csv"
 
-        # Load master data
+        # Load master data (10%)
+        update_progress(0.10, "Loading master data...")
         logs_master, master_data_df, errors_master = load_master_data(MASTER_DATA_PATH, file_key='master')
 
-        # Load orders data using unified pattern (read once)
+        # Load orders data using unified pattern (read once) (25%)
+        update_progress(0.25, "Loading orders data...")
         logs_orders, orders_unified_df = load_orders_unified(ORDERS_PATH, file_key='orders')
 
-        # Process orders data for item and header lookups
+        # Process orders data for item and header lookups (35%)
+        update_progress(0.35, "Processing order details...")
         logs_item, orders_item_df, errors_item = load_orders_item_lookup(orders_unified_df)
         logs_header, orders_header_df = load_orders_header_lookup(orders_unified_df)
 
-        # Load deliveries data using unified pattern (read once)
+        # Load deliveries data using unified pattern (read once) (50%)
+        update_progress(0.50, "Loading deliveries data...")
         logs_deliveries, deliveries_unified_df = load_deliveries_unified(DELIVERIES_PATH, file_key='deliveries')
 
-        # Load service data
+        # Load service data (65%)
+        update_progress(0.65, "Calculating service levels...")
         logs_service, service_data_df, errors_service = load_service_data(
             deliveries_unified_df,
             orders_header_df,
             master_data_df
         )
 
-        # Load backorder data
+        # Load backorder data (75%)
+        update_progress(0.75, "Analyzing backorders...")
         logs_backorder, backorder_data_df, errors_backorder = load_backorder_data(
             orders_item_df,
             orders_header_df,
             master_data_df
         )
 
-        # Load inventory data
+        # Load inventory data (85%)
+        update_progress(0.85, "Loading inventory snapshot...")
         logs_inventory, inventory_data_df, errors_inventory = load_inventory_data(INVENTORY_PATH, file_key='inventory')
 
-        # Load inventory analysis data
+        # Load inventory analysis data (85%)
+        update_progress(0.85, "Computing inventory analytics...")
         logs_analysis, inventory_analysis_df = load_inventory_analysis_data(
             inventory_data_df,
             deliveries_unified_df,
             master_data_df
         )
+
+        # Load vendor PO data (90%)
+        update_progress(0.90, "Loading vendor purchase orders...")
+        logs_vendor_pos, vendor_pos_df = load_vendor_pos(VENDOR_POS_PATH, file_key='vendor_pos')
+
+        # Load inbound receipt data (93%)
+        update_progress(0.93, "Loading inbound receipts...")
+        logs_inbound, inbound_df = load_inbound_data(INBOUND_PATH, file_key='inbound')
+
+        # Calculate vendor performance (95%)
+        update_progress(0.95, "Calculating vendor performance...")
+        logs_vendor_perf, vendor_performance_df = load_vendor_performance(vendor_pos_df, inbound_df)
+
+        # Calculate pricing analysis (98%)
+        update_progress(0.98, "Analyzing pricing and volume discounts...")
+        logs_pricing, pricing_analysis_df, vendor_discount_summary_df = load_pricing_analysis(vendor_pos_df, inbound_df)
+
+        # Finalizing (100%)
+        update_progress(1.0, "Ready!")
 
         return {
             # Data
@@ -138,6 +192,11 @@ def load_all_data():
             'backorder': backorder_data_df,
             'inventory': inventory_data_df,
             'inventory_analysis': inventory_analysis_df,
+            'vendor_pos': vendor_pos_df,
+            'inbound': inbound_df,
+            'vendor_performance': vendor_performance_df,
+            'pricing_analysis': pricing_analysis_df,
+            'vendor_discount_summary': vendor_discount_summary_df,
             'load_time': datetime.now(),
             'load_time_str': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 
@@ -151,6 +210,10 @@ def load_all_data():
             'backorder_logs': logs_backorder,
             'inventory_logs': logs_inventory,
             'analysis_logs': logs_analysis,
+            'vendor_pos_logs': logs_vendor_pos,
+            'inbound_logs': logs_inbound,
+            'vendor_perf_logs': logs_vendor_perf,
+            'pricing_logs': logs_pricing,
 
             # Debug info - Errors
             'master_errors': errors_master,
@@ -164,6 +227,11 @@ def load_all_data():
             'backorder_df': backorder_data_df,
             'inventory_df': inventory_data_df,
             'inventory_analysis_df': inventory_analysis_df,
+            'vendor_pos_df': vendor_pos_df,
+            'inbound_df': inbound_df,
+            'vendor_performance_df': vendor_performance_df,
+            'pricing_analysis_df': pricing_analysis_df,
+            'vendor_discount_summary_df': vendor_discount_summary_df,
         }
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
@@ -190,6 +258,7 @@ def main():
         "🚚 Service Level": "service_level",
         "⚠️ Backorders": "backorders",
         "📦 Inventory": "inventory",
+        "🏭 Vendor & Procurement": "vendor",
         "🔄 SKU Mapping": "sku_mapping"
     }
 
@@ -217,9 +286,20 @@ def main():
     st.sidebar.divider()
 
     # ===== SIDEBAR: DATA LOADING =====
-    # Load data
-    with st.spinner("Loading data..."):
-        data = load_all_data()
+    # Load data with progress indicator
+    progress_bar = st.sidebar.progress(0)
+    progress_text = st.sidebar.empty()
+
+    def update_loading_progress(progress, message):
+        """Update progress bar and text during data loading"""
+        progress_bar.progress(progress)
+        progress_text.text(message)
+
+    data = load_all_data(_progress_callback=update_loading_progress)
+
+    # Clear progress indicators
+    progress_bar.empty()
+    progress_text.empty()
 
     if data is None:
         st.error("Failed to load data. Please check your data files.")
@@ -273,6 +353,14 @@ def main():
 
     elif selected_page == "sku_mapping":
         render_sku_mapping_page(inventory_data=data['inventory'], backorder_data=data['backorder'])
+
+    elif selected_page == "vendor":
+        render_vendor_page(
+            po_data=data['vendor_pos'],
+            vendor_performance=data['vendor_performance'],
+            pricing_analysis=data['pricing_analysis'],
+            vendor_discount_summary=data['vendor_discount_summary']
+        )
 
     elif selected_page == "forecasting":
         render_forecast_page(orders_data=None, deliveries_data=None, master_data=None)

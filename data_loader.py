@@ -3,6 +3,7 @@ from datetime import datetime
 import numpy as np
 import warnings
 import time # <-- Import time for performance tracking
+import streamlit as st
 from file_loader import safe_read_csv
 
 # === Helper Functions ===
@@ -617,13 +618,17 @@ def load_inventory_data(inventory_path, file_key='inventory'):
     start_time = time.time()
     logs.append("--- Inventory Snapshot Loader ---")
     
-    # --- UPDATED: Load stock quantities AND pricing columns for stock value calculation ---
+    # --- UPDATED: Load stock quantities, pricing columns, AND descriptive fields for exports ---
     inventory_cols = {
         "Material Number": "sku",
         "POP Actual Stock Qty": "on_hand_qty",
         "POP Actual Stock in Transit Qty": "in_transit_qty",
         "POP Last Purchase: Price in Purch. Currency": "last_purchase_price",
-        "POP Last Purchase: Currency": "currency"
+        "POP Last Purchase: Currency": "currency",
+        "Storage Location: Code": "storage_location",
+        "Material Description": "product_name",
+        "Brand": "brand",
+        "POP Last Purchase: Date": "last_inbound_date"
     }
     
     try:
@@ -639,24 +644,47 @@ def load_inventory_data(inventory_path, file_key='inventory'):
     
     df = df.rename(columns=inventory_cols)
     df['sku'] = clean_string_column(df['sku'])
-    
+
     # --- OPTIMIZATION: Use vectorized numeric conversion ---
     df['on_hand_qty'] = safe_numeric_column(df['on_hand_qty'], remove_commas=True)
     df['in_transit_qty'] = safe_numeric_column(df['in_transit_qty'], remove_commas=True)
     df['last_purchase_price'] = safe_numeric_column(df['last_purchase_price'], remove_commas=True)
-    
+
     df['currency'] = df['currency'].astype(str).str.strip().str.upper()
     df['currency'] = df['currency'].fillna('USD')
+
+    # Clean storage_location column
+    df['storage_location'] = df['storage_location'].astype(str).str.strip()
+    df['storage_location'] = df['storage_location'].replace(['nan', 'None', ''], pd.NA)
+
+    # Clean descriptive fields
+    df['product_name'] = df['product_name'].astype(str).str.strip()
+    df['product_name'] = df['product_name'].replace(['nan', 'None', ''], pd.NA)
+
+    df['brand'] = df['brand'].astype(str).str.strip()
+    df['brand'] = df['brand'].replace(['nan', 'None', ''], pd.NA)
+
+    # Parse last_inbound_date
+    df['last_inbound_date'] = pd.to_datetime(df['last_inbound_date'], errors='coerce')
 
     # --- NEW: Aggregate stock by SKU ---
     # The inventory file can have multiple rows for the same SKU (e.g., in different storage locations).
     # We must sum quantities and take the first pricing info (prices should be the same per SKU).
+    # For storage_location, concatenate unique non-null values with " | " separator
+    # For descriptive fields (product_name, brand), take first non-null value
+    # For last_inbound_date, take the most recent (max) date
     rows_before_agg = len(df)
+
+    # OPTIMIZATION: Use lambda instead of named function for faster aggregation
     df = df.groupby('sku', as_index=False).agg({
         'on_hand_qty': 'sum',
         'in_transit_qty': 'sum',
         'last_purchase_price': 'first',  # Take first price (should be same per SKU)
-        'currency': 'first'  # Take first currency (should be same per SKU)
+        'currency': 'first',  # Take first currency (should be same per SKU)
+        'storage_location': lambda x: ' | '.join(sorted(x.dropna().unique())) if len(x.dropna().unique()) > 0 else '',
+        'product_name': 'first',  # Take first non-null product name
+        'brand': 'first',  # Take first non-null brand
+        'last_inbound_date': 'max'  # Take most recent inbound date
     })
     logs.append(f"INFO: Aggregated {rows_before_agg} rows into {len(df)} unique SKUs, summing on-hand and in-transit stock.")
     
@@ -983,6 +1011,263 @@ def get_forecast_horizon(sku: str, lead_time_lookup: dict, default_horizon: int 
     if sku in lead_time_lookup:
         return lead_time_lookup[sku]['lead_time_days']
     return default_horizon
+
+
+# ===== VENDOR & PROCUREMENT DATA LOADERS =====
+
+@st.cache_data(show_spinner="Loading vendor purchase orders...")
+def load_vendor_pos(po_path, file_key='vendor_pos'):
+    """
+    Load vendor purchase order data from Domestic Vendor POs.csv
+
+    Args:
+        po_path: Path to Domestic Vendor POs.csv
+        file_key: Session state key for uploaded file
+
+    Returns: logs (list), dataframe
+    """
+    logs = []
+    start_time = time.time()
+    logs.append("--- Vendor Purchase Orders Loader ---")
+
+    # Define column mapping
+    po_cols = {
+        "SAP Purchase Orders - Purchasing Document Number": "po_number",
+        "Order Creation Date - Date": "po_create_date",
+        "Last Requested Delivery Date - Date": "requested_delivery_date",
+        "Last Confirmed Delivery Date - Date": "confirmed_delivery_date",
+        "SAP Material Code": "sku",
+        "Model Desc": "product_description",
+        "SAP Supplier - Supplier Description": "vendor_name",
+        "SAP Supplier - Country Key": "vendor_country",
+        "SAP Supplier - City": "vendor_city",
+        "SAP Purchase Orders - Status": "po_status",
+        "Supplier Payment Terms": "payment_terms",
+        "SAP Purchase Orders - Document Currency Net Value": "po_value",
+        "SAP Purchase Orders - Document Currency Net Price": "unit_price",
+        "SAP Purchase Orders - Ordered Quantity": "ordered_qty",
+        "SAP Purchase Orders - Received Quantity": "received_qty",
+        "SAP Purchase Orders - Open Quantity": "open_qty"
+    }
+
+    try:
+        df = safe_read_csv(file_key, po_path, usecols=list(po_cols.keys()), low_memory=False)
+        logs.append(f"INFO: Found and loaded {len(df)} rows from Domestic Vendor POs.csv.")
+    except Exception as e:
+        logs.append(f"ERROR: Failed to read 'Domestic Vendor POs.csv'. Error: {e}")
+        return logs, pd.DataFrame()
+
+    if not check_columns(df, po_cols.keys(), "Domestic Vendor POs.csv", logs):
+        return logs, pd.DataFrame()
+
+    # Rename columns
+    df = df.rename(columns=po_cols)
+
+    # Clean SKU column
+    df['sku'] = clean_string_column(df['sku'])
+
+    # Clean vendor name
+    df['vendor_name'] = df['vendor_name'].astype(str).str.strip()
+    df['vendor_name'] = df['vendor_name'].replace(['nan', 'None', ''], 'Unknown Vendor')
+
+    # Clean PO number
+    df['po_number'] = df['po_number'].astype(str).str.strip()
+
+    # Parse dates
+    df['po_create_date'] = pd.to_datetime(df['po_create_date'], format='%m/%d/%y', errors='coerce')
+    df['requested_delivery_date'] = pd.to_datetime(df['requested_delivery_date'], format='%m/%d/%y', errors='coerce')
+    df['confirmed_delivery_date'] = pd.to_datetime(df['confirmed_delivery_date'], format='%m/%d/%y', errors='coerce')
+
+    # Use confirmed delivery if available, otherwise requested
+    df['expected_delivery_date'] = df['confirmed_delivery_date'].fillna(df['requested_delivery_date'])
+
+    # Convert numeric columns
+    df['ordered_qty'] = safe_numeric_column(df['ordered_qty'], remove_commas=True)
+    df['received_qty'] = safe_numeric_column(df['received_qty'], remove_commas=True)
+    df['open_qty'] = safe_numeric_column(df['open_qty'], remove_commas=True)
+    df['po_value'] = safe_numeric_column(df['po_value'], remove_commas=True)
+    df['unit_price'] = safe_numeric_column(df['unit_price'], remove_commas=True)
+
+    # Clean status
+    df['po_status'] = df['po_status'].astype(str).str.strip()
+    df['po_status'] = df['po_status'].replace(['nan', 'None', ''], 'Unknown')
+
+    # Calculate PO age (days since creation)
+    today = pd.Timestamp.now()
+    df['po_age_days'] = (today - df['po_create_date']).dt.days
+
+    # Calculate days to delivery (negative = overdue)
+    df['days_to_delivery'] = (df['expected_delivery_date'] - today).dt.days
+
+    # Determine if PO is open (has open quantity > 0)
+    df['is_open'] = df['open_qty'] > 0
+
+    # Calculate fill rate
+    df['fill_rate'] = df.apply(
+        lambda row: (row['received_qty'] / row['ordered_qty'] * 100) if row['ordered_qty'] > 0 else 0,
+        axis=1
+    )
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    logs.append(f"INFO: Vendor PO Loader finished in {total_time:.2f} seconds.")
+    logs.append(f"INFO: Loaded {len(df)} PO line items from {df['vendor_name'].nunique()} vendors.")
+    logs.append(f"INFO: {df['is_open'].sum()} open PO lines, {(~df['is_open']).sum()} closed/received.")
+
+    return logs, df
+
+
+@st.cache_data(show_spinner="Loading inbound receipts...")
+def load_inbound_data(inbound_path, file_key='inbound'):
+    """
+    Load inbound receipt data from DOMESTIC INBOUND.csv
+
+    Args:
+        inbound_path: Path to DOMESTIC INBOUND.csv
+        file_key: Session state key for uploaded file
+
+    Returns: logs (list), dataframe
+    """
+    logs = []
+    start_time = time.time()
+    logs.append("--- Inbound Receipts Loader ---")
+
+    # Define column mapping
+    inbound_cols = {
+        "Purchase Order Number": "po_number",
+        "Posting Date": "receipt_date",
+        "Material Number": "sku",
+        "Material Description": "product_description",
+        "PLM: Level Classification 4 (Attribute D_TMKLVL4CLS)": "category",
+        "POP Good Receipts Quantity": "received_qty",
+        "POP Good Receipts Amount (@Purchase Document Price in Document Currency)": "receipt_value"
+    }
+
+    try:
+        df = safe_read_csv(file_key, inbound_path, usecols=list(inbound_cols.keys()), low_memory=False)
+        logs.append(f"INFO: Found and loaded {len(df)} rows from DOMESTIC INBOUND.csv.")
+    except Exception as e:
+        logs.append(f"ERROR: Failed to read 'DOMESTIC INBOUND.csv'. Error: {e}")
+        return logs, pd.DataFrame()
+
+    if not check_columns(df, inbound_cols.keys(), "DOMESTIC INBOUND.csv", logs):
+        return logs, pd.DataFrame()
+
+    # Rename columns
+    df = df.rename(columns=inbound_cols)
+
+    # Clean columns
+    df['sku'] = clean_string_column(df['sku'])
+    df['po_number'] = df['po_number'].astype(str).str.strip()
+    df['category'] = df['category'].astype(str).str.strip()
+    df['category'] = df['category'].replace(['nan', 'None', ''], 'Unknown')
+
+    # Parse receipt date
+    df['receipt_date'] = pd.to_datetime(df['receipt_date'], format='%m/%d/%y', errors='coerce')
+
+    # Convert numeric columns
+    df['received_qty'] = safe_numeric_column(df['received_qty'], remove_commas=True)
+    df['receipt_value'] = safe_numeric_column(df['receipt_value'], remove_commas=True)
+
+    # Calculate receipt age
+    today = pd.Timestamp.now()
+    df['receipt_age_days'] = (today - df['receipt_date']).dt.days
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    logs.append(f"INFO: Inbound Receipts Loader finished in {total_time:.2f} seconds.")
+    logs.append(f"INFO: Loaded {len(df)} receipt records for {df['po_number'].nunique()} unique POs.")
+
+    return logs, df
+
+
+def load_vendor_performance(po_df, inbound_df):
+    """
+    Calculate vendor performance metrics by joining POs with receipts
+
+    Args:
+        po_df: Vendor PO dataframe from load_vendor_pos()
+        inbound_df: Inbound receipts dataframe from load_inbound_data()
+
+    Returns: logs (list), vendor performance dataframe
+    """
+    logs = []
+    start_time = time.time()
+    logs.append("--- Vendor Performance Calculator ---")
+
+    if po_df.empty:
+        logs.append("ERROR: PO dataframe is empty. Cannot calculate vendor performance.")
+        return logs, pd.DataFrame()
+
+    # Join POs with receipts to calculate lead time
+    if not inbound_df.empty:
+        # Merge on po_number and sku
+        merged = po_df.merge(
+            inbound_df[['po_number', 'sku', 'receipt_date', 'received_qty']],
+            on=['po_number', 'sku'],
+            how='left',
+            suffixes=('', '_receipt')
+        )
+
+        # Calculate actual lead time (receipt date - PO create date)
+        merged['actual_lead_time_days'] = (merged['receipt_date'] - merged['po_create_date']).dt.days
+
+        # Calculate planned lead time (expected delivery - PO create date)
+        merged['planned_lead_time_days'] = (merged['expected_delivery_date'] - merged['po_create_date']).dt.days
+
+        # Lead time variance
+        merged['lead_time_variance_days'] = merged['actual_lead_time_days'] - merged['planned_lead_time_days']
+
+        # On-time delivery (delivered by expected date)
+        merged['on_time_delivery'] = merged['receipt_date'] <= merged['expected_delivery_date']
+    else:
+        logs.append("WARN: No inbound receipt data available. Lead time metrics will be limited.")
+        merged = po_df.copy()
+        merged['actual_lead_time_days'] = None
+        merged['on_time_delivery'] = None
+
+    # Group by vendor to calculate performance metrics
+    vendor_perf = merged.groupby('vendor_name').agg({
+        'po_number': 'nunique',                          # Number of POs
+        'ordered_qty': 'sum',                            # Total ordered quantity
+        'received_qty': 'sum',                           # Total received quantity
+        'open_qty': 'sum',                               # Total open quantity
+        'po_value': 'sum',                               # Total PO value
+        'on_time_delivery': 'mean',                      # On-time delivery %
+        'actual_lead_time_days': 'mean',                 # Average actual lead time
+        'planned_lead_time_days': 'mean',                # Average planned lead time
+        'lead_time_variance_days': 'mean',               # Average lead time variance
+        'fill_rate': 'mean'                              # Average fill rate
+    }).reset_index()
+
+    # Rename columns for clarity
+    vendor_perf.columns = [
+        'vendor_name', 'po_count', 'total_ordered_qty', 'total_received_qty',
+        'total_open_qty', 'total_po_value', 'otif_pct', 'avg_actual_lead_time',
+        'avg_planned_lead_time', 'avg_lead_time_variance', 'avg_fill_rate'
+    ]
+
+    # Convert OTIF to percentage
+    vendor_perf['otif_pct'] = vendor_perf['otif_pct'] * 100
+
+    # Calculate composite vendor score (simple weighted average for now)
+    # OTIF (40%), Fill Rate (30%), Lead Time Consistency (30%)
+    vendor_perf['vendor_score'] = (
+        vendor_perf['otif_pct'] * 0.4 +
+        vendor_perf['avg_fill_rate'] * 0.3 +
+        (100 - abs(vendor_perf['avg_lead_time_variance'].fillna(0)) / vendor_perf['avg_planned_lead_time'].fillna(1) * 100) * 0.3
+    )
+
+    # Rank vendors
+    vendor_perf = vendor_perf.sort_values('vendor_score', ascending=False)
+    vendor_perf['vendor_rank'] = range(1, len(vendor_perf) + 1)
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    logs.append(f"INFO: Vendor Performance Calculator finished in {total_time:.2f} seconds.")
+    logs.append(f"INFO: Calculated performance for {len(vendor_perf)} vendors.")
+
+    return logs, vendor_perf
 
 
 # === BACKWARD COMPATIBILITY WRAPPERS ===

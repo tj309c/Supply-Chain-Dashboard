@@ -59,6 +59,80 @@ INVENTORY_RULES = {
         "include_dead_stock": True      # Include items with no movement
     },
 
+    "scrap_recommendation_system": {
+        # 3-Level data-driven scrap recommendation system
+        # Business Logic: OLDER SKUs with excess inventory = MORE aggressive candidates
+        # (More historical data = higher confidence in overstocking diagnosis)
+
+        "min_sku_age_days": 365,  # Minimum SKU age for any scrap recommendations (1 year)
+
+        "conservative": {
+            "description": "Conservative approach for older SKUs with very low demand",
+            "min_sku_age_days": 1095,  # >3 years old
+            "max_quarters_with_demand": 1,  # Low demand frequency (<=1 quarter)
+            "safety_stock_days": 365,  # Keep 12 months supply
+            "criteria": "Older SKUs (>3 years) + very low demand frequency"
+        },
+
+        "medium": {
+            "description": "Moderate approach for established SKUs",
+            "min_sku_age_days": 730,  # >2 years old
+            "safety_stock_days": 180,  # Keep 6 months supply (base)
+            "safety_stock_days_aggressive": 90,  # Keep 3 months (Class C/discontinued/superseded)
+            "criteria": "Moderate age SKUs (>2 years) with adjustments for ABC class, PLM status, alternate codes",
+            "aggressive_triggers": [
+                "ABC Class C (low value items)",
+                "Discontinued or expired PLM status",
+                "Superseded SKUs (old alternate codes)"
+            ]
+        },
+
+        "aggressive": {
+            "description": "Aggressive approach leveraging historical data confidence",
+            "min_sku_age_days": 365,  # >1 year old (base requirement)
+            "safety_stock_days_base": 90,  # Keep 3 months supply (base)
+            "safety_stock_days_very_aggressive": 60,  # Keep 2 months (>3 years old)
+            "safety_stock_days_extra_aggressive": 30,  # Keep 1 month (old + Class C/discontinued/superseded)
+            "very_aggressive_age_days": 1095,  # >3 years triggers very aggressive mode
+            "criteria": "Established SKUs (>1 year) with graduated aggressiveness based on age and risk factors",
+            "logic": "Older SKUs have more data points → higher confidence → more aggressive scrapping"
+        },
+
+        "dead_stock_handling": {
+            "description": "Items with no demand in historical period",
+            "criteria": "daily_demand = 0 AND sku_age_days > 365",
+            "action": "Scrap 100% across all levels (conservative, medium, aggressive)"
+        },
+
+        "exclusions": {
+            "young_skus": {
+                "threshold_days": 365,
+                "reason": "SKUs < 1 year old excluded - insufficient historical data for accurate recommendations"
+            }
+        },
+
+        "data_sources": {
+            "sku_age": "Activation Date (Code) from Master Data",
+            "demand_frequency": "Q1-Q4 demand from Deliveries (last 4 quarters)",
+            "demand_history": "Rolling 1-year usage from Deliveries",
+            "abc_classification": "Calculated from inventory value (cumulative % of total value)",
+            "plm_status": "PLM Current Status from Master Data",
+            "alternate_codes": "ALTERNATE_CODES.csv (superseded SKU identification)"
+        },
+
+        "output_format": {
+            "columns": [
+                "Conservative Scrap Qty",
+                "Conservative Scrap Value (USD)",
+                "Medium Scrap Qty",
+                "Medium Scrap Value (USD)",
+                "Aggressive Scrap Qty",
+                "Aggressive Scrap Value (USD)"
+            ],
+            "description": "6 additional columns added to warehouse scrap list export"
+        }
+    },
+
     "abc_analysis": {
         # Percentage thresholds for ABC classification
         "a_class_threshold": 80,  # Top 80% of value

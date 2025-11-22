@@ -187,7 +187,330 @@ def create_excel_export(data, section_name, currency="USD"):
     # Create a copy to avoid modifying original
     export_df = data.copy()
 
-    # Select relevant columns and format
+    # Special handling for Warehouse Scrap List - export all columns as-is with summary tab
+    if section_name == "Warehouse Scrap List":
+        # Warehouse scrap list already has formatted column names, export all columns
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            workbook = writer.book
+
+            # === TAB 1: RAW DATA ===
+            # Define professional formats (Luxottica brand colors: blue and white)
+            header_format = workbook.add_format({
+                'bold': True,
+                'font_size': 11,
+                'bg_color': '#0066CC',  # Luxottica blue
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'text_wrap': True
+            })
+
+            date_format = workbook.add_format({
+                'num_format': 'mm/dd/yyyy',
+                'border': 1
+            })
+
+            currency_format = workbook.add_format({
+                'num_format': '$#,##0.00',
+                'border': 1
+            })
+
+            number_format = workbook.add_format({
+                'num_format': '#,##0',
+                'border': 1
+            })
+
+            decimal_format = workbook.add_format({
+                'num_format': '#,##0.00',
+                'border': 1
+            })
+
+            text_format = workbook.add_format({
+                'border': 1,
+                'align': 'left',
+                'valign': 'vcenter'
+            })
+
+            # Write data without headers first
+            export_df.to_excel(writer, sheet_name="Raw Data", index=False, startrow=1, header=False)
+            worksheet = writer.sheets["Raw Data"]
+
+            # Write formatted headers
+            for col_idx, col_name in enumerate(export_df.columns):
+                worksheet.write(0, col_idx, col_name, header_format)
+
+            # Freeze top row
+            worksheet.freeze_panes(1, 0)
+
+            # Add comments/notes to scrap recommendation column headers (cells W-AB)
+            scrap_column_comments = {
+                'Conservative Scrap Qty': 'CONSERVATIVE APPROACH:\n• SKUs > 3 years old\n• Low demand frequency (≤1 quarter with demand)\n• Keep 12 months supply as safety stock\n• Excludes SKUs < 1 year old (insufficient data)',
+                'Conservative Scrap Value (USD)': 'CONSERVATIVE VALUE:\nUSD value of conservative scrap recommendation\n\nFormula: Conservative Scrap Qty × Last Purchase Price',
+                'Medium Scrap Qty': 'MEDIUM APPROACH:\n• SKUs > 2 years old\n• Keep 6 months supply (base)\n• Keep 3 months for Class C/discontinued/superseded SKUs\n• Adjusts for ABC class, PLM status, alternate codes',
+                'Medium Scrap Value (USD)': 'MEDIUM VALUE:\nUSD value of medium scrap recommendation\n\nFormula: Medium Scrap Qty × Last Purchase Price',
+                'Aggressive Scrap Qty': 'AGGRESSIVE APPROACH:\n• SKUs > 1 year old (base requirement)\n• Keep 3 months supply (base)\n• Keep 2 months for SKUs > 3 years old\n• Keep 1 month for old + Class C/discontinued/superseded\n• Dead stock (no demand) = scrap 100%\n• Logic: Older SKUs have more data → higher confidence',
+                'Aggressive Scrap Value (USD)': 'AGGRESSIVE VALUE:\nUSD value of aggressive scrap recommendation\n\nFormula: Aggressive Scrap Qty × Last Purchase Price'
+            }
+
+            # Apply column formatting and comments
+            date_columns = ['SKU Creation Date', 'Last Inbound Date', 'PLM Expiration Date']
+            currency_columns = ['STD Price', 'Total STD Price', 'USD value over 2 Yrs Supply',
+                              'Conservative Scrap Value (USD)', 'Medium Scrap Value (USD)', 'Aggressive Scrap Value (USD)']
+            number_columns = ['Free Qt', 'Q1 Demand', 'Q2 Demand', 'Q3 Demand', 'Q4 Demand',
+                            'Rolling 1 Yr Usage', '# of Qtrs with History', 'Qty over 2 Yrs Supply',
+                            'Conservative Scrap Qty', 'Medium Scrap Qty', 'Aggressive Scrap Qty']
+            decimal_columns = ['Months of Supply']
+
+            for col_idx, col_name in enumerate(export_df.columns):
+                # Set column width
+                if col_name in ['Material', 'Alternate Codes']:
+                    col_width = 15
+                elif col_name in ['Description']:
+                    col_width = 35
+                elif col_name in ['Storage Location', 'Category', 'Brand']:
+                    col_width = 20
+                elif col_name in date_columns:
+                    col_width = 12
+                elif col_name in currency_columns:
+                    col_width = 15
+                elif col_name in number_columns:
+                    col_width = 12
+                else:
+                    col_width = 14
+
+                # Apply formatting to data rows
+                if col_name in date_columns:
+                    worksheet.set_column(col_idx, col_idx, col_width, date_format)
+                elif col_name in currency_columns:
+                    worksheet.set_column(col_idx, col_idx, col_width, currency_format)
+                elif col_name in number_columns:
+                    worksheet.set_column(col_idx, col_idx, col_width, number_format)
+                elif col_name in decimal_columns:
+                    worksheet.set_column(col_idx, col_idx, col_width, decimal_format)
+                else:
+                    worksheet.set_column(col_idx, col_idx, col_width, text_format)
+
+                # Add comments to scrap recommendation columns
+                if col_name in scrap_column_comments:
+                    worksheet.write_comment(0, col_idx, scrap_column_comments[col_name], {
+                        'x_scale': 2.5,
+                        'y_scale': 2.5
+                    })
+
+            # === TAB 2: EXECUTIVE SUMMARY ===
+            summary_sheet = workbook.add_worksheet("Executive Summary")
+
+            # Define formats with Luxottica branding (blue and white)
+            summary_title_format = workbook.add_format({
+                'bold': True,
+                'font_size': 14,
+                'bg_color': '#0066CC',  # Luxottica blue
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter'
+            })
+            summary_header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#0066CC',  # Luxottica blue
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter'
+            })
+            summary_value_format = workbook.add_format({
+                'num_format': '#,##0',
+                'border': 1,
+                'align': 'right'
+            })
+            summary_currency_format = workbook.add_format({
+                'num_format': '$#,##0',
+                'border': 1,
+                'align': 'right'
+            })
+
+            # Header
+            row = 0
+            summary_sheet.merge_range(row, 0, row, 6, "WAREHOUSE SCRAP RECOMMENDATIONS - EXECUTIVE SUMMARY", summary_title_format)
+            row += 2
+
+            # Section 0: Business Rules Legend
+            summary_sheet.merge_range(row, 0, row, 6, "SCRAP RECOMMENDATION BUSINESS RULES", summary_title_format)
+            row += 1
+
+            legend_format = workbook.add_format({
+                'text_wrap': True,
+                'border': 1,
+                'align': 'left',
+                'valign': 'top'
+            })
+            legend_header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#D9E1F2',
+                'border': 1,
+                'text_wrap': True
+            })
+
+            # Conservative
+            summary_sheet.write(row, 0, "CONSERVATIVE", legend_header_format)
+            summary_sheet.merge_range(row, 1, row, 6,
+                "• SKUs > 3 years old\n"
+                "• Low demand frequency (≤1 quarter with demand in last 4 quarters)\n"
+                "• Keep 12 months supply as safety stock\n"
+                "• Excludes SKUs < 1 year old (insufficient historical data)\n"
+                "• Lowest risk, most cautious approach",
+                legend_format)
+            row += 1
+
+            # Medium
+            summary_sheet.write(row, 0, "MEDIUM", legend_header_format)
+            summary_sheet.merge_range(row, 1, row, 6,
+                "• SKUs > 2 years old\n"
+                "• Keep 6 months supply (base safety stock)\n"
+                "• MORE AGGRESSIVE (3 months) for:\n"
+                "  - ABC Class C items (low-value)\n"
+                "  - Discontinued or expired PLM status\n"
+                "  - Superseded SKUs (old alternate codes)\n"
+                "• Balanced approach with risk adjustments",
+                legend_format)
+            row += 1
+
+            # Aggressive
+            summary_sheet.write(row, 0, "AGGRESSIVE", legend_header_format)
+            summary_sheet.merge_range(row, 1, row, 6,
+                "• SKUs > 1 year old (minimum age requirement)\n"
+                "• Keep 3 months supply (base safety stock)\n"
+                "• VERY AGGRESSIVE (2 months) for SKUs > 3 years old\n"
+                "• EXTRA AGGRESSIVE (1 month) for SKUs > 3 years + Class C/discontinued/superseded\n"
+                "• Dead stock (no demand) = scrap 100%\n"
+                "• Logic: Older SKUs have more data points → higher confidence in recommendations",
+                legend_format)
+            row += 2
+
+            summary_sheet.set_row(row - 3, 80)  # Conservative row height
+            summary_sheet.set_row(row - 2, 90)  # Medium row height
+            summary_sheet.set_row(row - 1, 110) # Aggressive row height
+
+            # Section 1: Executive Summary Totals
+            summary_sheet.merge_range(row, 0, row, 4, "SUMMARY TOTALS BY SCRAP LEVEL", summary_title_format)
+            row += 1
+
+            # Calculate totals
+            total_skus = len(export_df)
+            conservative_skus = (export_df['Conservative Scrap Qty'] > 0).sum()
+            conservative_qty = export_df['Conservative Scrap Qty'].sum()
+            conservative_value = export_df['Conservative Scrap Value (USD)'].sum()
+
+            medium_skus = (export_df['Medium Scrap Qty'] > 0).sum()
+            medium_qty = export_df['Medium Scrap Qty'].sum()
+            medium_value = export_df['Medium Scrap Value (USD)'].sum()
+
+            aggressive_skus = (export_df['Aggressive Scrap Qty'] > 0).sum()
+            aggressive_qty = export_df['Aggressive Scrap Qty'].sum()
+            aggressive_value = export_df['Aggressive Scrap Value (USD)'].sum()
+
+            # Calculate weighted average months of supply (weighted by inventory value)
+            # Formula: Sum(months_of_supply * inventory_value) / Sum(inventory_value)
+            if 'Months of Supply' in export_df.columns and 'Total STD Price' in export_df.columns:
+                total_inventory_value = export_df['Total STD Price'].sum()
+                if total_inventory_value > 0:
+                    weighted_mos = (export_df['Months of Supply'] * export_df['Total STD Price']).sum() / total_inventory_value
+                else:
+                    weighted_mos = 0
+            else:
+                weighted_mos = 0
+
+            # Write summary table
+            summary_sheet.write(row, 0, "Scrap Level", summary_header_format)
+            summary_sheet.write(row, 1, "# SKUs with Recommendations", summary_header_format)
+            summary_sheet.write(row, 2, "Total Scrap Qty", summary_header_format)
+            summary_sheet.write(row, 3, "Total Scrap Value (USD)", summary_header_format)
+            summary_sheet.write(row, 4, "Weighted Avg Months of Supply", summary_header_format)
+            row += 1
+
+            summary_sheet.write(row, 0, "Conservative", summary_value_format)
+            summary_sheet.write(row, 1, conservative_skus, summary_value_format)
+            summary_sheet.write(row, 2, conservative_qty, summary_value_format)
+            summary_sheet.write(row, 3, conservative_value, summary_currency_format)
+            summary_sheet.write(row, 4, round(weighted_mos, 1), summary_value_format)
+            row += 1
+
+            summary_sheet.write(row, 0, "Medium", summary_value_format)
+            summary_sheet.write(row, 1, medium_skus, summary_value_format)
+            summary_sheet.write(row, 2, medium_qty, summary_value_format)
+            summary_sheet.write(row, 3, medium_value, summary_currency_format)
+            summary_sheet.write(row, 4, round(weighted_mos, 1), summary_value_format)
+            row += 1
+
+            summary_sheet.write(row, 0, "Aggressive", summary_value_format)
+            summary_sheet.write(row, 1, aggressive_skus, summary_value_format)
+            summary_sheet.write(row, 2, aggressive_qty, summary_value_format)
+            summary_sheet.write(row, 3, aggressive_value, summary_currency_format)
+            summary_sheet.write(row, 4, round(weighted_mos, 1), summary_value_format)
+            row += 3
+
+            # Section 2: Top 20 High-Value Scrap Opportunities
+            summary_sheet.merge_range(row, 0, row, 6, "TOP 20 HIGH-VALUE SCRAP OPPORTUNITIES (Aggressive)", summary_title_format)
+            row += 1
+
+            top_20 = export_df.nlargest(20, 'Aggressive Scrap Value (USD)')[
+                ['Material', 'Description', 'Category', 'Free Qt', 'Aggressive Scrap Qty', 'Aggressive Scrap Value (USD)', 'Months of Supply']
+            ].copy()
+
+            # Write top 20 header
+            for col_idx, col_name in enumerate(top_20.columns):
+                summary_sheet.write(row, col_idx, col_name, summary_header_format)
+            row += 1
+
+            # Write top 20 data
+            for _, data_row in top_20.iterrows():
+                for col_idx, value in enumerate(data_row):
+                    if col_idx in [4, 5]:  # Qty and Value columns
+                        summary_sheet.write(row, col_idx, value, summary_currency_format if col_idx == 5 else summary_value_format)
+                    else:
+                        summary_sheet.write(row, col_idx, value)
+                row += 1
+
+            row += 2
+
+            # Section 3: Category Breakdown (if available)
+            if 'Category' in export_df.columns and export_df['Category'].notna().any():
+                summary_sheet.merge_range(row, 0, row, 6, "SCRAP VALUE BY CATEGORY", summary_title_format)
+                row += 1
+
+                category_summary = export_df.groupby('Category').agg({
+                    'Material': 'count',
+                    'Conservative Scrap Value (USD)': 'sum',
+                    'Medium Scrap Value (USD)': 'sum',
+                    'Aggressive Scrap Value (USD)': 'sum'
+                }).reset_index()
+                category_summary.columns = ['Category', '# SKUs', 'Conservative Value', 'Medium Value', 'Aggressive Value']
+                category_summary = category_summary.sort_values('Aggressive Value', ascending=False).head(15)
+
+                # Write category header
+                for col_idx, col_name in enumerate(category_summary.columns):
+                    summary_sheet.write(row, col_idx, col_name, summary_header_format)
+                row += 1
+
+                # Write category data
+                for _, data_row in category_summary.iterrows():
+                    for col_idx, value in enumerate(data_row):
+                        if col_idx >= 2:  # Value columns
+                            summary_sheet.write(row, col_idx, value, summary_currency_format)
+                        else:
+                            summary_sheet.write(row, col_idx, value, summary_value_format if col_idx == 1 else None)
+                    row += 1
+
+            # Auto-adjust column widths for summary sheet
+            summary_sheet.set_column(0, 0, 25)
+            summary_sheet.set_column(1, 1, 30)
+            summary_sheet.set_column(2, 6, 18)
+
+        output.seek(0)
+        return output
+
+    # Select relevant columns and format for regular inventory exports
     value_col = f'stock_value_{currency.lower()}'
 
     columns_to_export = []
@@ -263,17 +586,44 @@ def create_excel_export(data, section_name, currency="USD"):
     output.seek(0)
     return output
 
+@st.cache_data(ttl=3600, show_spinner="Computing scrap recommendations...")
 def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency):
     """
-    Prepare comprehensive warehouse scrap list with all required fields
+    Prepare comprehensive warehouse scrap list with 3-level scrap recommendations
+
+    This function implements a data-driven, 3-level scrap recommendation system based on:
+    - SKU age (from activation date)
+    - Historical demand patterns (quarterly and rolling 1-year)
+    - ABC classification (calculated from inventory value)
+    - PLM status (discontinued/expired items)
+    - Alternate code status (superseded SKUs)
+
+    Business Logic (User-Validated):
+    - OLDER SKUs with excess inventory = MORE aggressive scrap candidates
+      (More data points = higher confidence in overstocking diagnosis)
+    - SKUs < 1 year old are EXCLUDED from all scrap recommendations
+      (Insufficient historical data for accurate recommendations)
+
+    Scrap Levels:
+    1. Conservative: Older SKUs (>3 years) + low demand frequency + keep 12 months supply
+    2. Medium: Moderate age SKUs (>2 years) + keep 6 months supply
+       - More aggressive (3 months) for Class C, discontinued, or superseded SKUs
+    3. Aggressive: Established SKUs (>1 year) + keep 3 months supply
+       - Very aggressive (2 months) for SKUs >3 years old
+       - Extra aggressive (1 month) for old + Class C/discontinued/superseded SKUs
+       - Dead stock (no demand) = scrap everything
 
     Args:
         inventory_data: Full inventory DataFrame with quarterly demand data
-        scrap_days_threshold: Days of supply threshold (default 730 = 2 years)
+        scrap_days_threshold: Days of supply threshold for legacy "2 years supply" calculation
         currency: Currency for value calculations
 
     Returns:
-        DataFrame with 19 required fields for warehouse scrap analysis
+        DataFrame with 25 fields (19 original + 6 new scrap recommendation columns):
+        - Original 19 fields: Material, Alternate Codes, Storage Location, Description, etc.
+        - NEW: Conservative Scrap Qty, Conservative Scrap Value (USD)
+        - NEW: Medium Scrap Qty, Medium Scrap Value (USD)
+        - NEW: Aggressive Scrap Qty, Aggressive Scrap Value (USD)
     """
     from business_rules import load_alternate_codes_mapping, get_alternate_codes
 
@@ -283,9 +633,6 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
     if df.empty:
         return pd.DataFrame()
 
-    # Load alternate codes
-    alt_codes_mapping = load_alternate_codes_mapping()
-
     # Calculate scrap quantities
     df['scrap_qty'] = df.apply(
         lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * scrap_days_threshold))
@@ -294,6 +641,10 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
     )
 
     # Calculate scrap value in USD
+    # Ensure currency column exists
+    if 'currency' not in df.columns:
+        df['currency'] = 'USD'
+
     df['scrap_value_usd'] = df.apply(
         lambda row: row['scrap_qty'] * convert_currency(
             row['last_purchase_price'],
@@ -306,37 +657,260 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
     # Calculate months of supply
     df['months_of_supply'] = df['dio'] / 30
 
+    # ===== 3-LEVEL SCRAP RECOMMENDATION SYSTEM =====
+    # Calculate SKU age in days (from activation date to today)
+    today = pd.to_datetime(datetime.now().date())
+    df['sku_age_days'] = (today - df['activation_date']).dt.days if 'activation_date' in df.columns else 0
+
+    # Calculate last demand date (from deliveries) - placeholder for now, will be populated if data available
+    # This will be calculated from the delivery history in a future enhancement
+
+    # Calculate demand frequency metrics
+    # We already have q1_demand, q2_demand, q3_demand, q4_demand from data_loader.py
+    # Count how many quarters had demand > 0
+    df['qtrs_with_demand'] = 0
+    for q in ['q1_demand', 'q2_demand', 'q3_demand', 'q4_demand']:
+        if q in df.columns:
+            df['qtrs_with_demand'] += (df[q] > 0).astype(int)
+
+    # Calculate monthly demand frequency (based on rolling 1yr usage)
+    df['avg_monthly_demand'] = df['rolling_1yr_usage'] / 12 if 'rolling_1yr_usage' in df.columns else 0
+
+    # Determine if SKU is superseded (has alternate codes and is old code)
+    from business_rules import is_old_code
+    df['is_superseded'] = df['sku'].apply(is_old_code)
+
+    # Determine ABC classification (placeholder - this would come from master data or be calculated)
+    # For now, we'll use a simple heuristic based on rolling 1yr usage value
+    if 'rolling_1yr_usage' in df.columns:
+        df['abc_class'] = 'C'  # Default to C
+        total_value = (df['on_hand_qty'] * df['last_purchase_price']).sum()
+        df['sku_value'] = df['on_hand_qty'] * df['last_purchase_price']
+        df_sorted = df.sort_values('sku_value', ascending=False)
+        df_sorted['cumulative_pct'] = (df_sorted['sku_value'].cumsum() / total_value * 100)
+        df.loc[df_sorted[df_sorted['cumulative_pct'] <= 80].index, 'abc_class'] = 'A'
+        df.loc[df_sorted[(df_sorted['cumulative_pct'] > 80) & (df_sorted['cumulative_pct'] <= 95)].index, 'abc_class'] = 'B'
+
+    # Check PLM status for discontinued items
+    df['is_discontinued'] = False
+    if 'plm_status' in df.columns:
+        df['is_discontinued'] = df['plm_status'].str.contains('discontin|expir|obsol', case=False, na=False)
+
+    # ===== CONSERVATIVE SCRAP LEVEL =====
+    # Target: Older SKUs (>3 years) + no demand in >12 months + keep 12 months supply
+    # Exclude SKUs < 1 year old
+    df['conservative_scrap_qty'] = 0
+    df['conservative_scrap_value_usd'] = 0.0
+
+    conservative_mask = (
+        (df['sku_age_days'] > 365) &  # At least 1 year old
+        (df['sku_age_days'] > 1095) &  # Prefer >3 years
+        (df['daily_demand'] > 0) &  # Must have demand history
+        (df['qtrs_with_demand'] < 2)  # Low demand frequency (< 2 quarters)
+    )
+
+    # Conservative: Keep 12 months supply (365 days)
+    df.loc[conservative_mask, 'conservative_scrap_qty'] = df.loc[conservative_mask].apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * 365)),
+        axis=1
+    )
+
+    # ===== MEDIUM SCRAP LEVEL =====
+    # Target: Moderate age SKUs (>2 years) + minimal demand (>6 months) + keep 6 months supply
+    df['medium_scrap_qty'] = 0
+    df['medium_scrap_value_usd'] = 0.0
+
+    medium_mask = (
+        (df['sku_age_days'] > 365) &  # At least 1 year old
+        (df['sku_age_days'] > 730) &  # Prefer >2 years
+        (df['daily_demand'] > 0)  # Must have demand history
+    )
+
+    # Medium: Keep 6 months supply (180 days)
+    df.loc[medium_mask, 'medium_scrap_qty'] = df.loc[medium_mask].apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * 180)),
+        axis=1
+    )
+
+    # More aggressive for Class C, discontinued, or superseded SKUs
+    medium_aggressive_mask = medium_mask & (
+        (df['abc_class'] == 'C') |
+        (df['is_discontinued']) |
+        (df['is_superseded'])
+    )
+    df.loc[medium_aggressive_mask, 'medium_scrap_qty'] = df.loc[medium_aggressive_mask].apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * 90)),  # Keep only 3 months
+        axis=1
+    )
+
+    # ===== AGGRESSIVE SCRAP LEVEL =====
+    # Target: Established SKUs (>1 year) + older = more aggressive + keep 3 months supply
+    # User's corrected logic: OLDER SKUs with excess inventory = MORE aggressive candidates
+    df['aggressive_scrap_qty'] = 0
+    df['aggressive_scrap_value_usd'] = 0.0
+
+    aggressive_mask = (
+        (df['sku_age_days'] > 365) &  # At least 1 year old (sufficient data points)
+        (df['daily_demand'] > 0)  # Must have demand history
+    )
+
+    # Aggressive: Base keep is 3 months supply (90 days)
+    df.loc[aggressive_mask, 'aggressive_scrap_qty'] = df.loc[aggressive_mask].apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * 90)),
+        axis=1
+    )
+
+    # VERY aggressive for older SKUs (>3 years) with high supply
+    # User's insight: More data points = more confidence in overstocking diagnosis
+    very_aggressive_mask = aggressive_mask & (df['sku_age_days'] > 1095)  # >3 years
+    df.loc[very_aggressive_mask, 'aggressive_scrap_qty'] = df.loc[very_aggressive_mask].apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * 60)),  # Keep only 2 months
+        axis=1
+    )
+
+    # EXTRA aggressive for Class C, discontinued, or superseded + old SKUs
+    extra_aggressive_mask = very_aggressive_mask & (
+        (df['abc_class'] == 'C') |
+        (df['is_discontinued']) |
+        (df['is_superseded'])
+    )
+    df.loc[extra_aggressive_mask, 'aggressive_scrap_qty'] = df.loc[extra_aggressive_mask].apply(
+        lambda row: max(0, row['on_hand_qty'] - (row['daily_demand'] * 30)),  # Keep only 1 month
+        axis=1
+    )
+
+    # For items with NO demand (dead stock), all levels recommend scrapping everything
+    dead_stock_mask = (df['daily_demand'] == 0) & (df['sku_age_days'] > 365)
+    df.loc[dead_stock_mask, 'conservative_scrap_qty'] = df.loc[dead_stock_mask, 'on_hand_qty']
+    df.loc[dead_stock_mask, 'medium_scrap_qty'] = df.loc[dead_stock_mask, 'on_hand_qty']
+    df.loc[dead_stock_mask, 'aggressive_scrap_qty'] = df.loc[dead_stock_mask, 'on_hand_qty']
+
+    # Calculate USD values for each scrap level
+    df['conservative_scrap_value_usd'] = df.apply(
+        lambda row: row['conservative_scrap_qty'] * convert_currency(
+            row['last_purchase_price'],
+            row.get('currency', 'USD'),
+            'USD'
+        ),
+        axis=1
+    )
+
+    df['medium_scrap_value_usd'] = df.apply(
+        lambda row: row['medium_scrap_qty'] * convert_currency(
+            row['last_purchase_price'],
+            row.get('currency', 'USD'),
+            'USD'
+        ),
+        axis=1
+    )
+
+    df['aggressive_scrap_value_usd'] = df.apply(
+        lambda row: row['aggressive_scrap_qty'] * convert_currency(
+            row['last_purchase_price'],
+            row.get('currency', 'USD'),
+            'USD'
+        ),
+        axis=1
+    )
+
     # Get alternate codes for each SKU
     df['alternate_codes'] = df['sku'].apply(
         lambda sku: ', '.join(get_alternate_codes(sku))
         if get_alternate_codes(sku) else ''
     )
 
-    # Build the 19-field export
+    # Build the 25-field export (19 original + 6 new scrap recommendation columns)
+    # Handle missing optional columns by creating empty Series with same index
     scrap_list = pd.DataFrame({
         'Material': df['sku'],
-        'Alternate Codes': df['alternate_codes'],
-        'Storage Location': df.get('storage_location', ''),
-        'Description': df.get('product_name', ''),
-        'SKU Creation Date': df.get('activation_date', ''),
-        'Flag Status (PLM Current Status)': df.get('plm_status', ''),
-        'Last Inbound Date': df.get('last_inbound_date', ''),  # Will be '' if not available
-        'PLM Expiration Date': df.get('plm_expiration_date', ''),
-        'Brand': df.get('brand', ''),  # Will be '' if not available
-        'Category': df.get('category', ''),
-        'STD Price': df['last_purchase_price'],
-        'Total STD Price': df['on_hand_qty'] * df['last_purchase_price'],
-        'Free Qt': df['on_hand_qty'],
-        'Q1 Demand': df.get('q1_demand', 0),
-        'Q2 Demand': df.get('q2_demand', 0),
-        'Q3 Demand': df.get('q3_demand', 0),
-        'Q4 Demand': df.get('q4_demand', 0),
-        'Rolling 1 Yr Usage': df.get('rolling_1yr_usage', 0),
-        '# of Qtrs with History': df.get('qtrs_with_history', 0),
-        'Months of Supply': df['months_of_supply'],
-        'Qty over 2 Yrs Supply': df['scrap_qty'],
-        'USD value over 2 Yrs Supply': df['scrap_value_usd']
+        'Alternate Codes': df['alternate_codes']
     })
+
+    # Add optional columns with fallback to empty string or 0
+    # Use .get() method on Series or check column existence first
+    if 'storage_location' in df.columns:
+        scrap_list['Storage Location'] = df['storage_location']
+    else:
+        scrap_list['Storage Location'] = ''
+
+    if 'product_name' in df.columns:
+        scrap_list['Description'] = df['product_name']
+    else:
+        scrap_list['Description'] = ''
+
+    if 'activation_date' in df.columns:
+        scrap_list['SKU Creation Date'] = df['activation_date']
+    else:
+        scrap_list['SKU Creation Date'] = ''
+
+    if 'plm_status' in df.columns:
+        scrap_list['Flag Status (PLM Current Status)'] = df['plm_status']
+    else:
+        scrap_list['Flag Status (PLM Current Status)'] = ''
+
+    if 'last_inbound_date' in df.columns:
+        scrap_list['Last Inbound Date'] = df['last_inbound_date']
+    else:
+        scrap_list['Last Inbound Date'] = ''
+
+    if 'plm_expiration_date' in df.columns:
+        scrap_list['PLM Expiration Date'] = df['plm_expiration_date']
+    else:
+        scrap_list['PLM Expiration Date'] = ''
+
+    if 'brand' in df.columns:
+        scrap_list['Brand'] = df['brand']
+    else:
+        scrap_list['Brand'] = ''
+
+    if 'category' in df.columns:
+        scrap_list['Category'] = df['category']
+    else:
+        scrap_list['Category'] = ''
+
+    scrap_list['STD Price'] = df['last_purchase_price']
+    scrap_list['Total STD Price'] = df['on_hand_qty'] * df['last_purchase_price']
+    scrap_list['Free Qt'] = df['on_hand_qty']
+
+    if 'q1_demand' in df.columns:
+        scrap_list['Q1 Demand'] = df['q1_demand']
+    else:
+        scrap_list['Q1 Demand'] = 0
+
+    if 'q2_demand' in df.columns:
+        scrap_list['Q2 Demand'] = df['q2_demand']
+    else:
+        scrap_list['Q2 Demand'] = 0
+
+    if 'q3_demand' in df.columns:
+        scrap_list['Q3 Demand'] = df['q3_demand']
+    else:
+        scrap_list['Q3 Demand'] = 0
+
+    if 'q4_demand' in df.columns:
+        scrap_list['Q4 Demand'] = df['q4_demand']
+    else:
+        scrap_list['Q4 Demand'] = 0
+
+    if 'rolling_1yr_usage' in df.columns:
+        scrap_list['Rolling 1 Yr Usage'] = df['rolling_1yr_usage']
+    else:
+        scrap_list['Rolling 1 Yr Usage'] = 0
+
+    if 'qtrs_with_history' in df.columns:
+        scrap_list['# of Qtrs with History'] = df['qtrs_with_history']
+    else:
+        scrap_list['# of Qtrs with History'] = 0
+    scrap_list['Months of Supply'] = df['months_of_supply']
+    scrap_list['Qty over 2 Yrs Supply'] = df['scrap_qty']
+    scrap_list['USD value over 2 Yrs Supply'] = df['scrap_value_usd']
+    # NEW: 3-Level Scrap Recommendations
+    scrap_list['Conservative Scrap Qty'] = df['conservative_scrap_qty']
+    scrap_list['Conservative Scrap Value (USD)'] = df['conservative_scrap_value_usd']
+    scrap_list['Medium Scrap Qty'] = df['medium_scrap_qty']
+    scrap_list['Medium Scrap Value (USD)'] = df['medium_scrap_value_usd']
+    scrap_list['Aggressive Scrap Qty'] = df['aggressive_scrap_qty']
+    scrap_list['Aggressive Scrap Value (USD)'] = df['aggressive_scrap_value_usd']
 
     # Sort by scrap value descending (highest value scrap opportunities first)
     scrap_list = scrap_list.sort_values('USD value over 2 Yrs Supply', ascending=False)
@@ -1040,10 +1614,149 @@ def render_stockout_risk_analysis(inventory_data, currency="USD"):
 
             st.dataframe(critical_detail.head(20), hide_index=True, width='stretch')
 
+# ===== TAB-SPECIFIC RENDER FUNCTIONS =====
+
+def render_overview_health_tab(filtered_data, currency, settings):
+    """Render Overview & Health tab content"""
+    st.subheader("📊 Inventory Health Overview")
+
+    # ABC Analysis & Inventory Health charts
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        abc_chart = render_abc_analysis_chart(filtered_data, currency)
+        if abc_chart:
+            render_chart(abc_chart, height=350)
+
+    with col2:
+        dio_chart = render_dio_distribution_chart(filtered_data, currency, settings['dio_buckets'])
+        if dio_chart:
+            render_chart(dio_chart, height=350)
+
+    with col3:
+        movement_chart = render_movement_classification_chart(filtered_data, currency)
+        if movement_chart:
+            render_chart(movement_chart, height=350)
+
+    st.divider()
+
+    # Category Benchmarking
+    st.markdown("#### 🏆 Category Benchmarking")
+    category_heatmap = render_category_heatmap(filtered_data, currency)
+    if category_heatmap:
+        render_chart(category_heatmap, height=250)
+    else:
+        render_info_box("Unable to generate category heatmap", type="info")
+
+def render_alerts_risks_tab(filtered_data, currency):
+    """Render Alerts & Risks tab content"""
+    st.subheader("⚠️ Inventory Alerts & Risk Management")
+
+    # Alternate Code Alerts
+    st.markdown("#### 🔄 Alternate Code Alerts")
+    render_alternate_code_alerts(filtered_data, currency)
+
+    st.divider()
+
+    # Stock-Out Risk Alerts
+    st.markdown("#### 📉 Stock-Out Risk Alerts")
+    render_stockout_risk_analysis(filtered_data, currency)
+
+def render_scrap_opportunities_tab(filtered_data, currency, scrap_threshold):
+    """Render Scrap Opportunities tab content"""
+    st.subheader("💡 Scrap & Obsolescence Opportunities")
+
+    render_scrap_opportunity_analysis(filtered_data, currency, scrap_threshold)
+
+def render_slow_movers_tab(filtered_data, currency):
+    """Render Slow Movers tab content"""
+    st.subheader("🐌 Slow-Moving Items Analysis")
+
+    value_col = f'stock_value_{currency.lower()}'
+    slow_movers = filtered_data[
+        filtered_data['movement_class'].isin(['Slow Moving', 'Very Slow Moving', 'Obsolete Risk', 'Dead Stock'])
+    ].copy()
+
+    if not slow_movers.empty:
+        slow_movers = slow_movers.sort_values(value_col, ascending=False).head(50)
+
+        display_cols = ['sku', 'category', 'abc_class', 'on_hand_qty', 'dio', 'daily_demand',
+                       'last_purchase_price', value_col, 'movement_class', 'stock_out_risk']
+        available_cols = [col for col in display_cols if col in slow_movers.columns]
+
+        result = slow_movers[available_cols].copy()
+
+        # Format numeric columns
+        result['dio'] = result['dio'].round(0).astype(int)
+        result['daily_demand'] = result['daily_demand'].round(2)
+        result['last_purchase_price'] = result['last_purchase_price'].round(2)
+        result[value_col] = result[value_col].round(2)
+
+        # Rename columns for display
+        col_names = {
+            'sku': 'SKU',
+            'category': 'Category',
+            'abc_class': 'ABC Class',
+            'on_hand_qty': 'On Hand Qty',
+            'dio': 'DIO (days)',
+            'daily_demand': 'Daily Demand',
+            'last_purchase_price': 'Unit Price',
+            value_col: f'Stock Value ({currency})',
+            'movement_class': 'Movement Class',
+            'stock_out_risk': 'Risk Level'
+        }
+        result = result.rename(columns=col_names)
+
+        render_data_table(
+            result,
+            max_rows=50
+        )
+    else:
+        render_info_box("No slow-moving items found in current selection", type="success")
+
+def render_detailed_records_tab(filtered_data, currency):
+    """Render Detailed Records tab content"""
+    st.subheader("📋 Detailed Inventory Records")
+
+    value_col = f'stock_value_{currency.lower()}'
+    display_columns = ['sku', 'category', 'abc_class', 'on_hand_qty', 'in_transit_qty',
+                      'daily_demand', 'dio', 'movement_class', 'stock_out_risk',
+                      'last_purchase_price', value_col]
+    available_cols = [col for col in display_columns if col in filtered_data.columns]
+
+    detail_data = filtered_data[available_cols].copy()
+
+    # Format numeric columns
+    detail_data['dio'] = detail_data['dio'].round(0).astype(int)
+    detail_data['daily_demand'] = detail_data['daily_demand'].round(2)
+    detail_data['last_purchase_price'] = detail_data['last_purchase_price'].round(2)
+    detail_data[value_col] = detail_data[value_col].round(2)
+
+    # Rename columns
+    col_names = {
+        'sku': 'SKU',
+        'category': 'Category',
+        'abc_class': 'ABC Class',
+        'on_hand_qty': 'On Hand',
+        'in_transit_qty': 'In Transit',
+        'daily_demand': 'Daily Demand',
+        'dio': 'DIO',
+        'movement_class': 'Movement',
+        'stock_out_risk': 'Risk',
+        'last_purchase_price': 'Unit Price',
+        value_col: f'Value ({currency})'
+    }
+    detail_data = detail_data.rename(columns=col_names)
+
+    render_data_table(
+        detail_data,
+        max_rows=100
+    )
+
 # ===== MAIN RENDER FUNCTION =====
 
 def render_inventory_page(inventory_data):
-    """Main inventory page render function"""
+    """Main inventory page render function with tabbed interface"""
 
     # Page header
     render_page_header(
@@ -1130,141 +1843,35 @@ def render_inventory_page(inventory_data):
     else:
         st.sidebar.info("No data available for selected export option")
 
-    # Calculate and display metrics
+    # Calculate and display metrics (shown at top level, above tabs)
     metrics = calculate_inventory_metrics(filtered_data, currency)
     render_kpi_row(metrics)
 
     st.divider()
 
-    # === ALTERNATE CODE ALERTS ===
-    render_alternate_code_alerts(filtered_data, currency)
+    # Tabbed Interface
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Overview & Health",
+        "⚠️ Alerts & Risks",
+        "💡 Scrap Opportunities",
+        "🐌 Slow Movers",
+        "📋 Detailed Records"
+    ])
 
-    st.divider()
+    with tab1:
+        render_overview_health_tab(filtered_data, currency, settings)
 
-    # === STOCK-OUT RISK ALERTS (HIGH PRIORITY) ===
-    render_stockout_risk_analysis(filtered_data, currency)
+    with tab2:
+        render_alerts_risks_tab(filtered_data, currency)
 
-    st.divider()
+    with tab3:
+        render_scrap_opportunities_tab(filtered_data, currency, scrap_threshold)
 
-    # === SLOW-MOVING / OBSOLESCENCE ANALYSIS (PRIMARY FOCUS) ===
-    render_scrap_opportunity_analysis(filtered_data, currency, scrap_threshold)
+    with tab4:
+        render_slow_movers_tab(filtered_data, currency)
 
-    st.divider()
-
-    # === ABC ANALYSIS ===
-    st.subheader("📊 ABC Analysis & Inventory Health")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        abc_chart = render_abc_analysis_chart(filtered_data, currency)
-        if abc_chart:
-            render_chart(abc_chart, height=350)
-
-    with col2:
-        dio_chart = render_dio_distribution_chart(filtered_data, currency, settings['dio_buckets'])
-        if dio_chart:
-            render_chart(dio_chart, height=350)
-
-    with col3:
-        movement_chart = render_movement_classification_chart(filtered_data, currency)
-        if movement_chart:
-            render_chart(movement_chart, height=350)
-
-    st.divider()
-
-    # === CATEGORY BENCHMARKING ===
-    st.subheader("🏆 Category Benchmarking")
-    category_heatmap = render_category_heatmap(filtered_data, currency)
-    if category_heatmap:
-        render_chart(category_heatmap, height=250)
-    else:
-        render_info_box("Unable to generate category heatmap", type="info")
-
-    st.divider()
-
-    # === TOP SLOW MOVERS TABLE ===
-    st.subheader("🐌 Top 50 Slow-Moving Items by Value")
-
-    value_col = f'stock_value_{currency.lower()}'
-    slow_movers = filtered_data[
-        filtered_data['movement_class'].isin(['Slow Moving', 'Very Slow Moving', 'Obsolete Risk', 'Dead Stock'])
-    ].copy()
-
-    if not slow_movers.empty:
-        slow_movers = slow_movers.sort_values(value_col, ascending=False).head(50)
-
-        display_cols = ['sku', 'category', 'abc_class', 'on_hand_qty', 'dio', 'daily_demand',
-                       'last_purchase_price', value_col, 'movement_class', 'stock_out_risk']
-        available_cols = [col for col in display_cols if col in slow_movers.columns]
-
-        result = slow_movers[available_cols].copy()
-
-        # Format numeric columns
-        result['dio'] = result['dio'].round(0).astype(int)
-        result['daily_demand'] = result['daily_demand'].round(2)
-        result['last_purchase_price'] = result['last_purchase_price'].round(2)
-        result[value_col] = result[value_col].round(2)
-
-        # Rename columns for display
-        col_names = {
-            'sku': 'SKU',
-            'category': 'Category',
-            'abc_class': 'ABC Class',
-            'on_hand_qty': 'On Hand Qty',
-            'dio': 'DIO (days)',
-            'daily_demand': 'Daily Demand',
-            'last_purchase_price': 'Unit Price',
-            value_col: f'Stock Value ({currency})',
-            'movement_class': 'Movement Class',
-            'stock_out_risk': 'Risk Level'
-        }
-        result = result.rename(columns=col_names)
-
-        render_data_table(
-            result,
-            max_rows=50
-        )
-    else:
-        render_info_box("No slow-moving items found in current selection", type="success")
-
-    st.divider()
-
-    # === DETAILED INVENTORY RECORDS ===
-    with st.expander("📋 View All Inventory Records", expanded=False):
-        display_columns = ['sku', 'category', 'abc_class', 'on_hand_qty', 'in_transit_qty',
-                          'daily_demand', 'dio', 'movement_class', 'stock_out_risk',
-                          'last_purchase_price', value_col]
-        available_cols = [col for col in display_columns if col in filtered_data.columns]
-
-        detail_data = filtered_data[available_cols].copy()
-
-        # Format numeric columns
-        detail_data['dio'] = detail_data['dio'].round(0).astype(int)
-        detail_data['daily_demand'] = detail_data['daily_demand'].round(2)
-        detail_data['last_purchase_price'] = detail_data['last_purchase_price'].round(2)
-        detail_data[value_col] = detail_data[value_col].round(2)
-
-        # Rename columns
-        col_names = {
-            'sku': 'SKU',
-            'category': 'Category',
-            'abc_class': 'ABC Class',
-            'on_hand_qty': 'On Hand',
-            'in_transit_qty': 'In Transit',
-            'daily_demand': 'Daily Demand',
-            'dio': 'DIO',
-            'movement_class': 'Movement',
-            'stock_out_risk': 'Risk',
-            'last_purchase_price': 'Unit Price',
-            value_col: f'Value ({currency})'
-        }
-        detail_data = detail_data.rename(columns=col_names)
-
-        render_data_table(
-            detail_data,
-            max_rows=100
-        )
+    with tab5:
+        render_detailed_records_tab(filtered_data, currency)
 
     # === FUTURE: MONTHLY SNAPSHOT STRUCTURE ===
     # Placeholder for future monthly inventory snapshots

@@ -3,7 +3,13 @@
     "allow": [
       "Bash(python:*)",
       "Bash(streamlit run:*)",
-      "Bash(python business_rules.py:*)"
+      "Bash(python business_rules.py:*)",
+      "Bash(timeout 5 bash:*)",
+      "Bash(timeout 180 streamlit run:*)",
+      "Bash(powershell:*)",
+      "Bash(test_output.txt)",
+      "Bash(cat:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []
