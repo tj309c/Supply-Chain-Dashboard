@@ -58,6 +58,7 @@ def apply_service_filters(service_data, filter_values):
 
     return filtered
 
+@st.cache_data(show_spinner=False)
 def calculate_service_metrics(service_data):
     """Calculate service level metrics"""
     if service_data.empty:

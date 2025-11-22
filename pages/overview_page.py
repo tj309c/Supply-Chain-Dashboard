@@ -13,6 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ui_components import render_page_header, render_kpi_row, render_chart, render_info_box, render_data_table
 from business_rules import CURRENCY_RULES
 
+@st.cache_data(show_spinner=False)
 def calculate_overview_metrics(service_data, backorder_data, inventory_data):
     """Calculate high-level metrics for overview page"""
     metrics = {}

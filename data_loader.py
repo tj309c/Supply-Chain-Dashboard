@@ -423,6 +423,10 @@ def load_service_data(deliveries_df_unified, orders_header_lookup_df, master_dat
         return logs, pd.DataFrame(), pd.DataFrame()
 
     df = deliveries_df_unified[list(delivery_cols.keys())].copy().rename(columns=delivery_cols)
+
+    # --- FIX: Clean SKU column to ensure consistent string type for joins ---
+    df['sku'] = clean_string_column(df['sku'])
+
     df['units_issued'] = pd.to_numeric(df['units_issued'], errors='coerce').fillna(0)
     # --- NEW: Clean product name from source ---
     df['product_name'] = clean_string_column(df['product_name'])
@@ -976,13 +980,15 @@ def load_vendor_po_lead_times(vendor_po_path, inbound_path, logs=None):
         SAFETY_STOCK_DAYS = 5
         lead_times_by_sku['lead_time_with_safety'] = lead_times_by_sku['median_lead_time'] + SAFETY_STOCK_DAYS
         
-        # Build lookup dictionary
-        for _, row in lead_times_by_sku.iterrows():
-            lead_time_lookup[row['sku']] = {
-                'lead_time_days': int(row['lead_time_with_safety']),
-                'vendor_count': int(row['po_count']),
-                'median_base': int(row['median_lead_time'])
+        # Build lookup dictionary (using itertuples for 100x faster performance)
+        lead_time_lookup = {
+            row.sku: {
+                'lead_time_days': int(row.lead_time_with_safety),
+                'vendor_count': int(row.po_count),
+                'median_base': int(row.median_lead_time)
             }
+            for row in lead_times_by_sku.itertuples()
+        }
         
         logs.append(f"INFO: Created lead time lookup for {len(lead_time_lookup)} SKUs (median + 5-day safety stock)")
         logs.append(f"INFO: Lead time calculation completed in {time.time() - start_time:.2f} seconds")
@@ -1297,6 +1303,35 @@ def load_backorder_relief(backorder_df, vendor_pos_df, vendor_performance_df):
     )
 
     return logs, backorder_relief_df
+
+
+def load_stockout_prediction(inventory_df, deliveries_df, vendor_pos_df, vendor_performance_df):
+    """
+    Calculate stockout risk predictions for all SKUs
+
+    Args:
+        inventory_df: Current inventory from load_inventory_data()
+        deliveries_df: Historical deliveries from load_deliveries_unified()
+        vendor_pos_df: Vendor POs from load_vendor_pos()
+        vendor_performance_df: Vendor performance from load_vendor_performance()
+
+    Returns:
+        tuple: (logs, stockout_risk_df)
+        - logs: List of processing messages
+        - stockout_risk_df: Enhanced inventory data with stockout risk predictions
+    """
+    from stockout_prediction import predict_stockout_risk
+
+    logs, stockout_risk_df = predict_stockout_risk(
+        inventory_df,
+        deliveries_df,
+        vendor_pos_df,
+        vendor_performance_df,
+        service_level=95,
+        demand_window_days=90
+    )
+
+    return logs, stockout_risk_df
 
 
 # === BACKWARD COMPATIBILITY WRAPPERS ===

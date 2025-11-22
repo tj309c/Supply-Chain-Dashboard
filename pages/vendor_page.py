@@ -17,6 +17,7 @@ from business_rules import CURRENCY_RULES
 
 # ===== SHARED UTILITY FUNCTIONS =====
 
+@st.cache_data(show_spinner=False)
 def calculate_vendor_metrics(po_data, vendor_performance):
     """Calculate high-level vendor and PO metrics"""
     metrics = {}

@@ -52,15 +52,12 @@ def analyze_inventory_split(inventory_data, alt_codes_mapping):
             total_qty = family_inventory['on_hand_qty'].sum()
             total_value = family_inventory.get('stock_value_usd', pd.Series([0])).sum()
 
-            # Build detail of which codes have inventory
-            codes_with_inventory = []
-            for _, row in family_inventory.iterrows():
-                codes_with_inventory.append({
-                    'code': row['sku'],
-                    'is_old': row['is_old'],
-                    'qty': row['on_hand_qty'],
-                    'value': row.get('stock_value_usd', 0)
-                })
+            # Build detail of which codes have inventory (vectorized using to_dict)
+            codes_with_inventory = family_inventory[['sku', 'is_old', 'on_hand_qty']].copy()
+            codes_with_inventory['value'] = family_inventory.get('stock_value_usd', 0)
+            codes_with_inventory = codes_with_inventory.rename(
+                columns={'sku': 'code', 'on_hand_qty': 'qty'}
+            ).to_dict('records')
 
             split_inventory.append({
                 'current_code': current_code,
@@ -96,31 +93,43 @@ def analyze_backorder_opportunities(backorder_data, inventory_data, alt_codes_ma
     # Find old code backorders
     old_code_backorders = backorder_with_current[backorder_with_current['is_old'] == True]
 
-    for _, bo_row in old_code_backorders.iterrows():
-        old_sku = bo_row['sku']
-        current_sku = bo_row['current_code']
-        backorder_qty = bo_row['backorder_qty']
+    # Vectorized approach: aggregate inventory by SKU, then merge with backorders
+    inventory_agg = inventory_with_current.groupby('sku').agg({
+        'on_hand_qty': 'sum'
+    }).reset_index()
+    inventory_agg.columns = ['current_code', 'available_qty_current_code']
 
-        # Check if inventory exists on current code
-        current_inventory = inventory_with_current[
-            inventory_with_current['sku'] == current_sku
-        ]
+    # Merge backorders with inventory availability
+    opps_merged = old_code_backorders.merge(
+        inventory_agg,
+        left_on='current_code',
+        right_on='current_code',
+        how='inner'
+    )
 
-        if not current_inventory.empty:
-            available_qty = current_inventory['on_hand_qty'].sum()
+    # Filter to only opportunities with available inventory
+    opps_merged = opps_merged[opps_merged['available_qty_current_code'] > 0]
 
-            if available_qty > 0:
-                opportunities.append({
-                    'old_code_backorder': old_sku,
-                    'current_code': current_sku,
-                    'backorder_qty': backorder_qty,
-                    'available_qty_current_code': available_qty,
-                    'can_fulfill_qty': min(backorder_qty, available_qty),
-                    'customer': bo_row.get('customer_name', 'Unknown'),
-                    'order_number': bo_row.get('sales_order', 'Unknown'),
-                    'days_on_backorder': bo_row.get('days_on_backorder', 0),
-                    'priority': 'High' if bo_row.get('days_on_backorder', 0) >= 30 else 'Medium'
-                })
+    # Calculate fulfillment quantities and priority
+    opps_merged['can_fulfill_qty'] = opps_merged.apply(
+        lambda row: min(row['backorder_qty'], row['available_qty_current_code']), axis=1
+    )
+    opps_merged['priority'] = opps_merged['days_on_backorder'].apply(
+        lambda days: 'High' if days >= 30 else 'Medium'
+    )
+
+    # Select and rename columns for final opportunities dataframe
+    if not opps_merged.empty:
+        opportunities = opps_merged[['sku', 'current_code', 'backorder_qty',
+                                     'available_qty_current_code', 'can_fulfill_qty',
+                                     'customer_name', 'sales_order', 'days_on_backorder',
+                                     'priority']].rename(
+            columns={
+                'sku': 'old_code_backorder',
+                'customer_name': 'customer',
+                'sales_order': 'order_number'
+            }
+        ).to_dict('records')
 
     return pd.DataFrame(opportunities)
 
