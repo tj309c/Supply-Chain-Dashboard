@@ -25,12 +25,14 @@ from data_loader import (
     load_inbound_data,
     load_vendor_performance,
     load_backorder_relief,
+    load_stockout_prediction,
 )
 
 # Import pricing analysis
-import pricing_analysis as pricing_analysis_module
-importlib.reload(pricing_analysis_module)
 from pricing_analysis import load_pricing_analysis
+
+# Import demand forecasting
+from demand_forecasting import generate_demand_forecast
 
 # Import UI components
 from ui_components import (
@@ -43,13 +45,12 @@ from pages.service_level_page import render_service_level_page
 from pages.inventory_page import render_inventory_page
 from pages.backorder_page import render_backorder_page
 from pages.sku_mapping_page import render_sku_mapping_page
-import pages.vendor_page as vendor_page_module
-importlib.reload(vendor_page_module)
 from pages.vendor_page import render_vendor_page
 from pages.data_upload_page import render_data_upload_page
 from pages.inbound_page import render_inbound_page
 from pages.forecast_page import render_forecast_page
 from pages.debug_page import render_debug_page
+from pages.demand_page import show_demand_page
 
 # ===== PAGE CONFIGURATION =====
 st.set_page_config(
@@ -167,25 +168,38 @@ def load_all_data(_progress_callback=None):
             master_data_df
         )
 
-        # Load vendor PO data (90%)
-        update_progress(0.90, "Loading vendor purchase orders...")
+        # Load vendor PO data (87%)
+        update_progress(0.87, "Loading vendor purchase orders...")
         logs_vendor_pos, vendor_pos_df = load_vendor_pos(VENDOR_POS_PATH, file_key='vendor_pos')
 
-        # Load inbound receipt data (93%)
-        update_progress(0.93, "Loading inbound receipts...")
+        # Load inbound receipt data (89%)
+        update_progress(0.89, "Loading inbound receipts...")
         logs_inbound, inbound_df = load_inbound_data(INBOUND_PATH, file_key='inbound')
 
-        # Calculate vendor performance (95%)
-        update_progress(0.95, "Calculating vendor performance...")
+        # Calculate vendor performance (91%)
+        update_progress(0.91, "Calculating vendor performance...")
         logs_vendor_perf, vendor_performance_df = load_vendor_performance(vendor_pos_df, inbound_df)
 
-        # Calculate pricing analysis (98%)
-        update_progress(0.98, "Analyzing pricing and volume discounts...")
+        # Calculate stockout risk predictions (93%)
+        update_progress(0.93, "Predicting stockout risk...")
+        logs_stockout, stockout_risk_df = load_stockout_prediction(
+            inventory_data_df,
+            deliveries_unified_df,
+            vendor_pos_df,
+            vendor_performance_df
+        )
+
+        # Calculate pricing analysis (95%)
+        update_progress(0.95, "Analyzing pricing and volume discounts...")
         logs_pricing, pricing_analysis_df, vendor_discount_summary_df = load_pricing_analysis(vendor_pos_df, inbound_df)
 
-        # Calculate backorder relief dates (99%)
-        update_progress(0.99, "Calculating backorder relief dates...")
+        # Calculate backorder relief dates (97%)
+        update_progress(0.97, "Calculating backorder relief dates...")
         logs_relief, backorder_relief_df = load_backorder_relief(backorder_data_df, vendor_pos_df, vendor_performance_df)
+
+        # Generate demand forecasts (99%)
+        update_progress(0.99, "Generating demand forecasts...")
+        logs_demand, demand_forecast_df, demand_accuracy_df = generate_demand_forecast(deliveries_unified_df, forecast_horizon_days=90)
 
         # Finalizing (100%)
         update_progress(1.0, "Ready!")
@@ -198,11 +212,15 @@ def load_all_data(_progress_callback=None):
             'backorder_relief': backorder_relief_df,
             'inventory': inventory_data_df,
             'inventory_analysis': inventory_analysis_df,
+            'stockout_risk': stockout_risk_df,
             'vendor_pos': vendor_pos_df,
             'inbound': inbound_df,
             'vendor_performance': vendor_performance_df,
             'pricing_analysis': pricing_analysis_df,
             'vendor_discount_summary': vendor_discount_summary_df,
+            'demand_forecast': demand_forecast_df,
+            'demand_accuracy': demand_accuracy_df,
+            'deliveries': deliveries_unified_df,  # Add deliveries data for demand-based calculations
             'load_time': datetime.now(),
             'load_time_str': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 
@@ -219,8 +237,10 @@ def load_all_data(_progress_callback=None):
             'vendor_pos_logs': logs_vendor_pos,
             'inbound_logs': logs_inbound,
             'vendor_perf_logs': logs_vendor_perf,
+            'stockout_logs': logs_stockout,
             'pricing_logs': logs_pricing,
             'relief_logs': logs_relief,
+            'demand_logs': logs_demand,
 
             # Debug info - Errors
             'master_errors': errors_master,
@@ -234,11 +254,14 @@ def load_all_data(_progress_callback=None):
             'backorder_df': backorder_data_df,
             'inventory_df': inventory_data_df,
             'inventory_analysis_df': inventory_analysis_df,
+            'stockout_risk_df': stockout_risk_df,
             'vendor_pos_df': vendor_pos_df,
             'inbound_df': inbound_df,
             'vendor_performance_df': vendor_performance_df,
             'pricing_analysis_df': pricing_analysis_df,
             'vendor_discount_summary_df': vendor_discount_summary_df,
+            'demand_forecast_df': demand_forecast_df,
+            'demand_accuracy_df': demand_accuracy_df,
         }
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
@@ -266,11 +289,12 @@ def main():
         "⚠️ Backorders": "backorders",
         "📦 Inventory": "inventory",
         "🏭 Vendor & Procurement": "vendor",
+        "📈 Demand Forecasting": "demand",
         "🔄 SKU Mapping": "sku_mapping"
     }
 
     future_pages = {
-        "📈 Forecasting": "forecasting",
+        "📊 Old Forecasting": "forecasting",
         "🚛 Inbound Logistics": "inbound"
     }
 
@@ -346,7 +370,7 @@ def main():
         render_overview_page(
             service_data=data['service'],
             backorder_data=data['backorder'],
-            inventory_data=data['inventory']
+            inventory_data=data['inventory_analysis']  # Use inventory_analysis to get DIO calculations
         )
 
     elif selected_page == "service_level":
@@ -356,7 +380,9 @@ def main():
         render_backorder_page(
             backorder_data=data['backorder'],
             backorder_relief_data=data['backorder_relief'],
-            inventory_data=data['inventory']
+            stockout_risk_data=data['stockout_risk'],
+            inventory_data=data['inventory'],
+            deliveries_data=data['deliveries']  # Pass real deliveries data - NO FAKE DATA
         )
 
     elif selected_page == "inventory":
@@ -371,6 +397,13 @@ def main():
             vendor_performance=data['vendor_performance'],
             pricing_analysis=data['pricing_analysis'],
             vendor_discount_summary=data['vendor_discount_summary']
+        )
+
+    elif selected_page == "demand":
+        show_demand_page(
+            deliveries_df=data['deliveries'],
+            demand_forecast_df=data['demand_forecast'],
+            forecast_accuracy_df=data['demand_accuracy']
         )
 
     elif selected_page == "forecasting":

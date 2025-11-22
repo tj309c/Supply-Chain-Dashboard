@@ -48,6 +48,7 @@ streamlit_debug.log
 .DS_Store
 Thumbs.db
 *.tmp
+*.tmp.*
 
 # Logs
 *.log
