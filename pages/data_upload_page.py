@@ -314,8 +314,8 @@ def render_data_upload_page():
 
                         st.success(f"✅ File validated successfully! Loaded {len(df):,} rows")
 
-                            with st.expander("Preview Data (first 5 rows)", expanded=False):
-                                st.dataframe(df.head(), width='stretch')
+                        with st.expander("Preview Data (first 5 rows)", expanded=False):
+                            st.dataframe(df.head(), width='stretch')
 
                     else:
                         st.error("❌ Validation failed:")
@@ -445,18 +445,18 @@ def render_data_upload_page():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-            if st.button("🔄 Refresh Dashboard", width='stretch', help="Clear cache and reload dashboard with uploaded data"):
+        if st.button("🔄 Refresh Dashboard", width='stretch', help="Clear cache and reload dashboard with uploaded data"):
             st.cache_data.clear()
             st.success("✅ Cache cleared! Navigate to any page to see your uploaded data.")
 
     with col2:
-            if st.button("🗑️ Clear All Uploads", width='stretch', help="Remove all uploaded files"):
+        if st.button("🗑️ Clear All Uploads", width='stretch', help="Remove all uploaded files"):
             st.session_state.uploaded_files = {}
             st.success("✅ All uploads cleared!")
             st.rerun()
 
     with col3:
-            if st.button("📥 Download All Templates", width='stretch', help="Download all templates as a ZIP"):
+        if st.button("📥 Download All Templates", width='stretch', help="Download all templates as a ZIP"):
             st.info("Feature coming soon: Bulk template download")
 
     st.divider()
@@ -469,7 +469,7 @@ def render_data_upload_page():
         history_df = pd.DataFrame(st.session_state.upload_history[-10:])
         history_df = history_df[['timestamp', 'file', 'status', 'rows']]
         history_df.columns = ['Timestamp', 'File', 'Status', 'Rows']
-            st.dataframe(history_df, hide_index=True, width='stretch')
+        st.dataframe(history_df, hide_index=True, width='stretch')
     else:
         st.info("No upload history yet")
 

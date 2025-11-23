@@ -323,6 +323,8 @@ def generate_demand_forecast(deliveries_df, master_data_df=None, forecast_horizo
         # Ensure SKU column exists and is properly formatted
         if 'Item - SAP Model Code' in master_data_clean.columns:
             master_data_clean['sku'] = master_data_clean['Item - SAP Model Code'].astype(str).str.strip()
+        elif 'Material Number' in master_data_clean.columns:
+            master_data_clean['sku'] = master_data_clean['Material Number'].astype(str).str.strip()
         elif 'sku' not in master_data_clean.columns:
             logs.append("WARNING: No SKU column found in master data")
             master_data_clean = None

@@ -3486,4 +3486,283 @@ The modular architecture ensures that each component can be developed, tested, a
 
 **Current Progress**: Phase 2 is substantially complete with 5 of 8 core modules fully implemented. The platform now provides advanced inventory analytics, SKU code management, and user data upload capabilities - delivering immediate business value to the supply chain team.
 
+---
+
+## Phase 3: Dashboard Consolidation & User Experience Enhancements (CURRENT)
+
+### Completed Work (January 2025)
+
+**1. Demand Forecasting Tab Consolidation (✅ COMPLETED)**
+- Reduced demand forecasting page from 5 tabs to 3 focused tabs
+- Consolidated "Forecast Overview" + "SKU-Level Forecasts" → "📊 Forecast Summary"
+- Kept "🎯 Forecast Accuracy" as standalone (comprehensive backtesting & snapshot tracking)
+- Merged "Demand Patterns" + "Trends & Visualization" → "📈 Demand Trends & Analysis"
+- **Benefits**: Reduced redundancy, faster page loading, improved navigation
+
+**2. Dashboard Architecture Analysis & Enhancement Roadmap**
+- Conducted comprehensive analysis of all 9 dashboard pages
+- Identified redundancies, cross-page integration opportunities, and missing features
+- Created prioritized enhancement roadmap for Phase 3
+
+### Planned Enhancements (Phase 3 Roadmap)
+
+#### Priority 1: Quick Wins (High Impact, Low Effort)
+
+**A. Remove Legacy "Old Forecasting" Navigation Item**
+- Status: Identified for removal
+- Current state: Shows redirect message to new Demand page
+- Impact: Reduces user confusion, cleaner navigation
+- Effort: 2 minutes
+
+**B. Fix Startup Script Documentation**
+- Status: Already completed (port cleanup, auto-install dependencies)
+- All three startup scripts enhanced:
+  - `start_dashboard.bat` (Windows batch)
+  - `start_dashboard.ps1` (PowerShell)
+  - `start_dashboard_dev.bat` (Development mode)
+
+#### Priority 2: Overview Page Transformation (High Value)
+
+**Transform Overview from KPI Repeater to Executive Command Center**
+
+Current Issues:
+- Overview page simply repeats metrics from other pages
+- No unique value-add or cross-functional insights
+- Missing actionable recommendations
+
+Planned Enhancements:
+1. **Top 3 Action Items Panel**
+   - Pull critical items from all modules
+   - Examples: "15 backorders need immediate attention", "3 POs overdue", "5 SKUs at stockout risk"
+   - Clickable links to jump to relevant page pre-filtered
+
+2. **Cross-Functional Insights**
+   - Correlation analysis: "Service level dropped 5% due to 12 new critical backorders"
+   - Trend indicators: "Backorder aging improving (↓15% vs last month)"
+   - Supply chain health score based on all metrics
+
+3. **Quick Links & Drill-Down**
+   - Click any metric to jump to detailed page
+   - Smart filtering applied automatically
+   - Breadcrumb navigation for user orientation
+
+4. **Trend Indicators**
+   - Show if metrics are improving/degrading vs last period
+   - Color coding: Green (improving), Yellow (stable), Red (degrading)
+   - Period-over-period comparison (week/month/quarter)
+
+**Estimated Effort**: 30-45 minutes
+**Business Value**: High - Enables executives to identify issues and take action faster
+
+#### Priority 3: Cross-Page Navigation & Integration
+
+**Add Contextual Navigation Between Related Pages**
+
+Examples:
+- Backorder page → "View Related POs" button → Vendor page filtered to those POs
+- Vendor page → "Show Backorders" button → Backorder page filtered to that vendor
+- Inventory critical stock → "Create/Expedite PO" link to Vendor page
+- Demand forecast high confidence → Link to Inventory to verify stock levels
+
+Benefits:
+- Reduces user friction when investigating issues
+- Enables end-to-end workflow completion
+- Improves cross-functional collaboration
+
+**Estimated Effort**: 15 minutes per page pair
+**Business Value**: Medium-High - Significantly improves user productivity
+
+#### Priority 4: Service Level Root Cause Analysis
+
+**Add Root Cause Analysis to Service Level Page** (Similar to Backorder Page)
+
+Current Gap:
+- Service level page shows metrics but not why deliveries are late
+- No categorization of late delivery reasons
+
+Planned Features:
+1. **Root Cause Categorization**
+   - Vendor delays
+   - Backorder-related
+   - Logistics/transportation issues
+   - Internal processing delays
+   - Other/Unknown
+
+2. **Top Impact Analysis**
+   - Top customers affected by late deliveries
+   - Top SKUs with delivery issues
+   - Trend analysis: improving or degrading?
+
+3. **Actionable Insights**
+   - "80% of late deliveries due to vendor delays - see Vendor Performance page"
+   - "12 late deliveries could have been avoided if backorders were resolved"
+
+**Estimated Effort**: 20-30 minutes
+**Business Value**: High - Enables targeted improvement actions
+
+#### Priority 5: Demand Forecasting ↔ Inventory Integration
+
+**Connect Demand Forecasting with Inventory Planning**
+
+Add to Inventory Page:
+1. **Forecasted Stockout Risk Analysis**
+   - Combine current DIO with demand forecast
+   - Alert: "SKU X has 15 days stock but 30-day forecast shows 2X demand spike"
+   - Priority ranking by stockout probability
+
+2. **Recommended Reorder Points**
+   - Formula: Forecasted demand × Lead time × Safety stock factor
+   - Consider demand volatility (high CV = higher safety stock)
+   - Export reorder recommendations to create POs
+
+3. **Forecast-Based ABC Classification**
+   - Traditional ABC uses historical demand
+   - Enhanced: Use forward-looking forecast demand
+   - Identify SKUs trending up/down in importance
+
+Add to Demand Page:
+1. **Current Inventory Levels with Forecast**
+   - Show inventory DIO next to forecast
+   - Color coding:
+     - Green: Adequate stock (DIO > forecast horizon)
+     - Yellow: Monitor (DIO < forecast horizon but > 50%)
+     - Red: Will stockout (DIO < 50% of forecast horizon)
+
+2. **Stock Coverage Analysis**
+   - "Current inventory covers X days at forecasted demand"
+   - "Expected stockout date: YYYY-MM-DD"
+   - "Action required: Create PO for XXX units by YYYY-MM-DD"
+
+**Estimated Effort**: 45-60 minutes
+**Business Value**: Very High - Enables proactive inventory planning based on statistical forecasts
+
+#### Priority 6: Inventory Page Enhancements
+
+**Add Actionable Recommendations to Inventory Page**
+
+Current Gap:
+- Inventory page shows analytics but limited actionable guidance
+- Users must manually interpret data and decide actions
+
+Planned Features:
+1. **Smart Recommendations Panel**
+   - "Create PO for 15 critical stock items" → Export button for list
+   - "Scrap opportunity: Free up $XXX by removing 50 dead stock items" → Export list
+   - "Consolidate 8 split inventory families to improve DIO"
+
+2. **Stockout Prevention Actions**
+   - Link critical stock items to demand forecast
+   - "This item will stockout in X days at current demand"
+   - "Recommended PO: XXX units to arrive by YYYY-MM-DD"
+
+3. **DIO Improvement Opportunities**
+   - Identify SKUs with DIO > threshold but low/declining demand
+   - Suggest scrap or markdown
+   - Estimate cash freed up
+
+**Estimated Effort**: 30 minutes
+**Business Value**: High - Converts analytics to actionable tasks
+
+#### Priority 7: Vendor Page Enhancements
+
+**Add Vendor Improvement Tracking**
+
+Current Gap:
+- Vendor page shows current performance but not trends
+- No tracking of improvement/degradation over time
+- No recommended actions for underperformers
+
+Planned Features:
+1. **Vendor Performance Trends**
+   - Scorecard trends: Are vendors improving or degrading?
+   - Month-over-month comparison
+   - Visual indicators (↑ improving, ↓ declining, → stable)
+
+2. **Recommended Actions for Underperformers**
+   - Bottom 25% vendors flagged
+   - Suggested actions:
+     - "Schedule vendor review meeting"
+     - "Request corrective action plan"
+     - "Consider alternative suppliers for SKU XXX"
+
+3. **Cost of Poor Performance**
+   - Calculate impact: Late deliveries × Avg order value × Backorder cost
+   - "Vendor ABC's late deliveries cost $XXX in lost sales this month"
+   - ROI of vendor improvement efforts
+
+**Estimated Effort**: 30 minutes
+**Business Value**: Medium-High - Enables proactive vendor management
+
+### Optional Consolidations (For Discussion)
+
+**1. Merge SKU Mapping into Inventory Page**
+- Rationale: Alternate code management is primarily inventory optimization
+- Benefits: Reduces page count, keeps related features together
+- Considerations: SKU Mapping may be used daily by procurement team - check with stakeholders first
+
+**2. Remove or Merge Inbound Page**
+- Current state: Placeholder with no real functionality
+- Options:
+  - Option A: Remove from navigation until implemented
+  - Option B: Merge into Vendor page when ready (both are procurement-focused)
+
+**3. Consolidate Debug Page**
+- Consider adding "Admin" mode toggle instead of separate page
+- Benefits: Reduces navigation clutter for end users
+- Keeps debug tools accessible for administrators
+
+### Dashboard Enhancement Summary
+
+**Current State (January 2025):**
+- 8 active pages (9 including placeholder Inbound)
+- Strong individual page functionality
+- Limited cross-page integration
+- Some redundancy in metrics display
+
+**Target State (Post Phase 3):**
+- 7-8 optimized pages
+- Overview page as executive command center
+- Cross-page navigation and filtering
+- Integrated demand forecasting + inventory planning
+- Actionable recommendations on every analytical page
+- Root cause analysis across all modules
+
+**Key Metrics for Success:**
+- Time to insight: Reduce from 5 minutes to < 1 minute for common queries
+- User satisfaction: Gather feedback on cross-page navigation
+- Action completion rate: % of recommendations acted upon
+- Data accuracy: Maintain 95%+ accuracy with enhanced features
+
+### Implementation Priority
+
+**Immediate (Week 1):**
+1. Remove "Old Forecasting" from navigation
+2. Enhance Overview page with action items
+
+**Short-term (Weeks 2-4):**
+3. Add Service Level root cause analysis
+4. Integrate Demand Forecasting with Inventory (stockout predictions)
+5. Add cross-page navigation buttons
+
+**Medium-term (Weeks 5-8):**
+6. Add Inventory actionable recommendations
+7. Add Vendor improvement tracking
+8. Evaluate SKU Mapping consolidation with stakeholders
+
+**Long-term (Future Phases):**
+9. Implement or remove Inbound page
+10. Add global search across all pages
+11. Add unified filtering across related pages
+12. Create "Action Items" tracking module
+
+---
+
+## Conclusion
+
+This project plan provides a roadmap for transforming the POP Supply Chain Dashboard into a comprehensive, integrated platform. By focusing on modular development, data integration, and user-centric design, we will deliver a powerful tool that provides end-to-end supply chain visibility and enables data-driven decision making.
+
+The modular architecture ensures that each component can be developed, tested, and deployed independently while still contributing to the unified platform vision. This approach allows for flexibility, rapid iteration, and continuous value delivery to the supply chain team.
+
+**Current Progress**: Phase 3 in progress - Dashboard consolidation and UX enhancements underway. Demand forecasting tabs successfully consolidated from 5 to 3. Comprehensive enhancement roadmap established with clear priorities and business value justification.
+
 **Let's continue building an exceptional supply chain platform together!**

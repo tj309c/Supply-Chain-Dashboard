@@ -830,7 +830,7 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
         quarterly_data['quarter'] = pd.cut(quarterly_data['ship_date'], bins=quarter_bins, labels=quarter_labels, include_lowest=True)
 
         # Single groupby + pivot to get all quarters at once
-        quarterly_pivot = quarterly_data.groupby(['sku', 'quarter'])['units_issued'].sum().reset_index()
+        quarterly_pivot = quarterly_data.groupby(['sku', 'quarter'], observed=True)['units_issued'].sum().reset_index()
         quarterly_pivot = quarterly_pivot.pivot(index='sku', columns='quarter', values='units_issued').reset_index()
 
         # Fill missing quarters with 0

@@ -87,15 +87,13 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
     st.divider()
 
     # ===== TABBED INTERFACE =====
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Forecast Overview",
-        "🔍 SKU-Level Forecasts",
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Forecast Summary",
         "🎯 Forecast Accuracy",
-        "📈 Demand Patterns",
-        "📉 Demand Trends & Visualization"
+        "📈 Demand Trends & Analysis"
     ])
 
-    # ===== TAB 1: Forecast Overview =====
+    # ===== TAB 1: Forecast Summary (Merged Overview + SKU-Level Search) =====
     with tab1:
         st.markdown("#### Top 20 SKUs by Forecasted Demand")
 
@@ -191,8 +189,8 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
             )
             st.plotly_chart(fig_method, width='stretch')
 
-    # ===== TAB 2: SKU-Level Forecasts =====
-    with tab2:
+        # === SKU-LEVEL SEARCH & FILTER (Merged from old Tab 2) ===
+        st.divider()
         st.markdown("#### Search & Filter SKU Forecasts")
 
         # Search and filter controls
@@ -268,8 +266,8 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
                 mime="text/csv"
             )
 
-    # ===== TAB 3: Forecast Accuracy =====
-    with tab3:
+    # ===== TAB 2: Forecast Accuracy =====
+    with tab2:
         st.markdown("#### Forecast Accuracy Analysis")
 
         if forecast_accuracy_df.empty:
@@ -484,8 +482,8 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
 
                     st.dataframe(category_accuracy_display, width='stretch', hide_index=True)
 
-    # ===== TAB 4: Demand Patterns =====
-    with tab4:
+    # ===== TAB 3: Demand Trends & Analysis (Merged Patterns + Visualization) =====
+    with tab3:
         st.markdown("#### Demand Pattern Analysis")
 
         # Volatility analysis
@@ -588,8 +586,8 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
         )
         st.plotly_chart(fig_scatter, width='stretch')
 
-    # ===== TAB 5: Demand Trends & Visualization =====
-    with tab5:
+        # === HISTORICAL DEMAND & FORECAST VISUALIZATION (Merged from old Tab 5) ===
+        st.divider()
         st.markdown("#### Historical Demand & Forecast Projection")
 
         if daily_demand_df.empty:
@@ -597,7 +595,12 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
         else:
             # Merge category information into daily demand
             if 'category' in demand_forecast_df.columns:
-                category_mapping = demand_forecast_df[['sku', 'category', 'sku_description']].drop_duplicates()
+                # Build column list based on what's available
+                mapping_cols = ['sku', 'category']
+                if 'sku_description' in demand_forecast_df.columns:
+                    mapping_cols.append('sku_description')
+
+                category_mapping = demand_forecast_df[mapping_cols].drop_duplicates()
                 daily_demand_with_cat = pd.merge(
                     daily_demand_df,
                     category_mapping,
@@ -605,6 +608,8 @@ def show_demand_page(deliveries_df, demand_forecast_df, forecast_accuracy_df, ma
                     how='left'
                 )
                 daily_demand_with_cat['category'] = daily_demand_with_cat['category'].fillna('Uncategorized')
+                if 'sku_description' not in daily_demand_with_cat.columns:
+                    daily_demand_with_cat['sku_description'] = 'Unknown'
             else:
                 daily_demand_with_cat = daily_demand_df.copy()
                 daily_demand_with_cat['category'] = 'Uncategorized'

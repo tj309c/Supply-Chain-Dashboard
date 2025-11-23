@@ -91,7 +91,7 @@ if ($Action -eq 'Env') {
             'DELIVERIES' { $env:DELIVERIES_FILE_PATH = $v }
             'MASTER'     { $env:MASTER_DATA_FILE_PATH = $v }
             'INVENTORY'  { $env:INVENTORY_FILE_PATH = $v }
-            default      { Write-Warn "Unknown key: $k — setting env var directly"; $env:$k = $v }
+            default      { Write-Warn "Unknown key: $k - setting env var directly"; Set-Item -Path "env:$k" -Value $v }
         }
         Write-Info "Set $k -> $v"
     }
@@ -108,7 +108,7 @@ function Try-Activate-Venv {
     foreach ($path in $candidates) {
         if (Test-Path $path) {
             Write-Info "Activating virtualenv: $path"
-            try { & $path; return $true } catch { Write-Warn "Failed to activate $path: $_"; continue }
+            try { & $path; return $true } catch { Write-Warn "Failed to activate $path - $_"; continue }
         }
     }
     return $false
@@ -192,6 +192,18 @@ if ($AutoActivateVenv.IsPresent) {
     if (-not $activated -and $CondaName) { Write-Warn "Conda activation requested but not successful (name: $CondaName)" }
 }
 
+# Kill any existing processes using port 8501
+Write-Info 'Checking for existing Streamlit processes on port 8501...'
+try {
+    $processes = Get-NetTCPConnection -LocalPort 8501 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($pid in $processes) {
+        Write-Info "Closing existing process on port 8501 (PID: $pid)"
+        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    Write-Warn "Could not check for existing processes: $_"
+}
+
 # Show current runtime file settings
 Write-Host "ORDERS: $env:ORDERS_FILE_PATH"
 Write-Host "DELIVERIES: $env:DELIVERIES_FILE_PATH"
@@ -238,4 +250,4 @@ switch ($Action) {
     }
 }
 
-Write-Host '`nDone.'
+Write-Host "`nDone."

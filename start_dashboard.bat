@@ -68,6 +68,13 @@ if exist "%~dp0requirements.txt" (
 goto end
 
 :run_app
+REM Kill any existing processes using port 8501
+echo Checking for existing Streamlit processes on port 8501...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8501 ^| findstr LISTENING') do (
+  echo Closing existing process on port 8501 (PID: %%a)
+  taskkill //F //PID %%a >nul 2>&1
+)
+
 REM Auto-install requirements before starting (quick check)
 echo Checking and installing dependencies...
 if exist "%~dp0requirements.txt" (
@@ -104,6 +111,13 @@ if errorlevel 1 (
 goto end
 
 :run_dev
+REM Kill any existing processes using port 8501
+echo Checking for existing Streamlit processes on port 8501...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8501 ^| findstr LISTENING') do (
+  echo Closing existing process on port 8501 (PID: %%a)
+  taskkill //F //PID %%a >nul 2>&1
+)
+
 REM Auto-install requirements before starting (quick check)
 echo Checking and installing dependencies...
 if exist "%~dp0requirements.txt" (
