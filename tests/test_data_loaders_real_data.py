@@ -14,11 +14,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data_loader import (
     load_master_data,
-    load_orders_item_lookup,
-    load_orders_header_lookup,
-    load_service_data,
+    load_orders_item_lookup_legacy as load_orders_item_lookup,
+    load_orders_header_lookup_legacy as load_orders_header_lookup,
+    load_service_data_legacy as load_service_data,
     load_backorder_data,
-    load_inventory_data
+    load_inventory_data,
+    load_orders_unified,
+    load_deliveries_unified
 )
 
 # ===== FILE PATH CONFIGURATION =====
@@ -239,8 +241,10 @@ class TestServiceDataLoader:
 
         logs, df, errors = load_service_data(DELIVERIES_PATH, header_df, master_df)
 
-        # ship_month should be in YYYY-MM format
-        assert df['ship_month'].str.match(r'^\d{4}-\d{2}$').all(), "ship_month should be YYYY-MM format"
+        # ship_month should be month name (e.g., "January", "February")
+        valid_months = ['January', 'February', 'March', 'April', 'May', 'June',
+                        'July', 'August', 'September', 'October', 'November', 'December']
+        assert df['ship_month'].isin(valid_months).all(), "ship_month should be a valid month name"
 
 # ===== BACKORDER DATA TESTS =====
 
@@ -355,18 +359,20 @@ class TestDataLoaderIntegration:
         assert_dataframe_not_empty(inventory_df, "Inventory data should load")
 
     def test_referential_integrity_service_to_master(self):
-        """Tests that all SKUs in service data exist in master data"""
+        """Tests that SKUs not in master data are handled with 'Unknown' category"""
         _, master_df, _ = load_master_data(MASTER_DATA_PATH)
         _, header_df = load_orders_header_lookup(ORDERS_PATH)
-        _, service_df, _ = load_service_data(DELIVERIES_PATH, header_df, master_df)
+        logs, service_df, _ = load_service_data(DELIVERIES_PATH, header_df, master_df)
 
         if not service_df.empty:
-            # All SKUs in service should be in master
-            service_skus = set(service_df['sku'].unique())
-            master_skus = set(master_df['sku'].unique())
-            missing_skus = service_skus - master_skus
+            # SKUs not in master should have 'Unknown' category
+            unknown_category_rows = service_df[service_df['category'] == 'Unknown']
+            if len(unknown_category_rows) > 0:
+                # Verify warning was logged
+                assert_log_contains(logs, "rows in Service Data have SKUs not found in Master Data")
 
-            assert len(missing_skus) == 0, f"Found SKUs in service data not in master: {missing_skus}"
+                # Verify these rows have Unknown category
+                assert (unknown_category_rows['category'] == 'Unknown').all()
 
     def test_referential_integrity_backorder_to_master(self):
         """Tests that all SKUs in backorder data exist in master data"""

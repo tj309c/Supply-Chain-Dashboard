@@ -383,7 +383,7 @@ def render_sku_mapping_page(inventory_data, backorder_data):
 
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        search_button = st.button("🔎 Search", use_container_width=True)
+        search_button = st.button("🔎 Search", width='stretch')
 
     if search_button and search_sku:
         # Check if SKU exists in mapping

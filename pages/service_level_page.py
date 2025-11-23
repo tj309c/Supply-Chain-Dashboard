@@ -8,6 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import sys
 import os
+from datetime import datetime # Import datetime
+from scipy.stats import linregress # Import for linear regression
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ui_components import (
     render_page_header, render_kpi_row, render_chart,
@@ -41,6 +43,16 @@ def get_service_level_filters(service_data):
             "key": "sl_month_filter"
         })
 
+    # Year filter (for pages that have ship_year)
+    if 'ship_year' in service_data.columns:
+        years = ['All'] + sorted(service_data['ship_year'].dropna().unique().tolist())
+        filters.append({
+            "type": "selectbox",
+            "label": "Year",
+            "options": years,
+            "key": "sl_year_filter"
+        })
+
     return filters
 
 def apply_service_filters(service_data, filter_values):
@@ -55,6 +67,9 @@ def apply_service_filters(service_data, filter_values):
 
     if 'sl_month_filter' in filter_values and filter_values['sl_month_filter'] != 'All':
         filtered = filtered[filtered['ship_month'] == filter_values['sl_month_filter']]
+
+    if 'sl_year_filter' in filter_values and filter_values['sl_year_filter'] != 'All':
+        filtered = filtered[filtered['ship_year'] == filter_values['sl_year_filter']]
 
     return filtered
 
@@ -93,48 +108,97 @@ def calculate_service_metrics(service_data):
 # ===== TAB-SPECIFIC RENDER FUNCTIONS =====
 
 def render_monthly_trends_tab(filtered_data):
-    """Render Monthly Trends tab content"""
+    """Render Monthly Trends tab content with separate lines for each year"""
     st.subheader("Monthly Performance Trends")
 
-    if 'ship_month' not in filtered_data.columns:
+    if 'ship_month' not in filtered_data.columns or 'ship_year' not in filtered_data.columns:
         st.info("No monthly data available")
         return
 
-    monthly = filtered_data.groupby('ship_month').agg({
+    monthly = filtered_data.groupby(['ship_year', 'ship_month_num']).agg({
         'on_time': ['sum', 'count'],
         'units_issued': 'sum',
         'days_to_deliver': 'mean'
     }).reset_index()
 
-    monthly.columns = ['month', 'on_time_count', 'total_count', 'total_units', 'avg_days']
+    monthly.columns = ['year', 'month_num', 'on_time_count', 'total_count', 'total_units', 'avg_days']
     monthly['on_time_pct'] = (monthly['on_time_count'] / monthly['total_count'] * 100)
-    monthly = monthly.sort_values('month')
+    monthly = monthly.sort_values(['year', 'month_num'])
 
-    # Create dual-axis chart
+    # Create dual-axis chart with separate traces for each year
     fig = go.Figure()
 
-    fig.add_trace(go.Bar(
-        x=monthly['month'],
-        y=monthly['total_count'],
-        name='Total Orders',
-        marker_color='lightblue',
-        yaxis='y'
-    ))
+    # Get unique years
+    years = sorted(monthly['year'].unique())
 
-    fig.add_trace(go.Scatter(
-        x=monthly['month'],
-        y=monthly['on_time_pct'],
-        name='On-Time %',
-        line=dict(color='green', width=3),
-        marker=dict(size=8),
-        yaxis='y2'
-    ))
+    # Color palette for different years
+    colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#3B4D61', '#6B9AC4']
+
+    for i, year in enumerate(years):
+        year_data = monthly[monthly['year'] == year]
+        color = colors[i % len(colors)]
+
+        # Create x-axis labels as "Month Year"
+        x_labels = [f"{pd.to_datetime(f'{year}-{month:02d}-01').strftime('%b %Y')}" for month in year_data['month_num']]
+
+        # Add bar trace for total orders
+        fig.add_trace(go.Bar(
+            x=x_labels,
+            y=year_data['total_count'],
+            name=f'{year} - Orders',
+            marker_color=color,
+            opacity=0.7,
+            showlegend=True
+        ))
+
+        # Add scatter trace for on-time %
+        fig.add_trace(go.Scatter(
+            x=x_labels,
+            y=year_data['on_time_pct'],
+            mode='lines+markers',
+            name=f'{year} - On-Time %',
+            line=dict(color=color, width=3),
+            marker=dict(size=8, color=color),
+            yaxis='y2',
+            showlegend=True
+        ))
+
+    # Filter for the last 3 years for the overall trend line
+    current_year = datetime.now().year
+    three_years_ago = current_year - 2 # Includes current year, and two previous
+    trend_data = monthly[monthly['year'] >= three_years_ago]
+
+    # Calculate linear regression for the overall trend if enough data points exist
+    if len(trend_data) > 1:
+        # Convert month_num and year to a continuous numerical scale for regression
+        trend_data['time_index'] = (trend_data['year'] - trend_data['year'].min()) * 12 + (trend_data['month_num'] - 1)
+
+        slope, intercept, r_value, p_value, std_err = linregress(
+            trend_data['time_index'], trend_data['on_time_pct']
+        )
+        trend_line_y = intercept + slope * trend_data['time_index']
+
+        # Generate x_labels for the entire trend_data range
+        trend_x_labels = [f"{pd.to_datetime(f'{y}-{m:02d}-01').strftime('%b %Y')}" for y, m in zip(trend_data['year'], trend_data['month_num'])]
+
+        # Add overall trend line
+        fig.add_trace(go.Scatter(
+            x=trend_x_labels,
+            y=trend_line_y,
+            mode='lines',
+            name='Overall Trend (Last 3 Yrs)',
+            line=dict(color='black', width=2, dash='dashdot'),
+            showlegend=True,
+            yaxis='y2'
+        ))
 
     fig.update_layout(
         xaxis_title="Month",
         yaxis=dict(title="Order Count", side='left'),
         yaxis2=dict(title="On-Time %", overlaying='y', side='right', range=[0, 100]),
-        hovermode='x unified'
+        hovermode='x unified',
+        legend_title="Year & Metric",
+        barmode='group'
     )
 
     render_chart(fig, height=400)
@@ -156,76 +220,40 @@ def render_customer_performance_tab(filtered_data):
     customer_summary.columns = ['Customer', 'On_Time_Count', 'Total_Orders', 'Total_Units', 'Avg_Days']
     customer_summary['On_Time_%'] = (customer_summary['On_Time_Count'] / customer_summary['Total_Orders'] * 100).round(1)
 
-    # Select display columns
-    display_cols = ['Customer', 'Total_Orders', 'On_Time_%', 'Total_Units', 'Avg_Days']
-    customer_summary = customer_summary[display_cols].sort_values('Total_Orders', ascending=False)
-
-    render_data_table(
-        customer_summary,
-        max_rows=20,
-        downloadable=True,
-        download_filename="service_level_by_customer.csv"
+    # Sort customers by On-Time % (descending), then by Total Orders (descending)
+    customer_summary = customer_summary.sort_values(
+        by=['On_Time_%', 'Total_Orders'],
+        ascending=[False, False]
     )
 
-def render_detailed_records_tab(filtered_data):
-    """Render Detailed Records tab content"""
-    st.subheader("Detailed Delivery Records")
+    # Highlight top 10 customers by On-Time %
+    top_customers = customer_summary.head(10)
 
-    display_columns = ['customer_name', 'ship_month', 'units_issued', 'days_to_deliver', 'on_time']
-    available_cols = [col for col in display_columns if col in filtered_data.columns]
+    # Main table
+    st.write("### All Customers")
+    render_data_table(customer_summary)
 
-    render_data_table(
-        filtered_data[available_cols],
-        max_rows=100,
-        downloadable=True,
-        download_filename="service_level_detail.csv"
-    )
-
-# ===== MAIN RENDER FUNCTION =====
+    # Top customers table
+    st.write("### Top 10 Customers by On-Time %")
+    render_data_table(top_customers)
 
 def render_service_level_page(service_data):
-    """Main service level page render function with tabbed interface"""
+    """Main entry point for Service Level page"""
+    st.title("🚚 Service Level Analysis")
+    render_page_header("Service Level", "Delivery performance, on-time rates, and cycle times.")
 
-    # Page header
-    render_page_header(
-        "Service Level Performance",
-        icon="🚚",
-        subtitle="Track delivery performance and on-time metrics"
-    )
-
-    if service_data.empty:
-        st.warning("No service level data available")
-        return
-
-    # Render filters
-    filters_config = get_service_level_filters(service_data)
-    filter_values = render_filter_section(filters_config)
-
-    # Apply filters
+    # Filters
+    filters = get_service_level_filters(service_data)
+    filter_values = render_filter_section(filters)
     filtered_data = apply_service_filters(service_data, filter_values)
 
-    if filtered_data.empty:
-        st.info("No data matches the selected filters")
-        return
-
-    # Calculate and display metrics (shown at top level, above tabs)
+    # KPIs
     metrics = calculate_service_metrics(filtered_data)
     render_kpi_row(metrics)
 
-    st.divider()
-
-    # Tabbed Interface
-    tab1, tab2, tab3 = st.tabs([
-        "📈 Monthly Trends",
-        "👥 Customer Performance",
-        "📋 Detailed Records"
-    ])
-
+    # Tabs
+    tab1, tab2 = st.tabs(["Monthly Trends", "Customer Performance"])
     with tab1:
         render_monthly_trends_tab(filtered_data)
-
     with tab2:
         render_customer_performance_tab(filtered_data)
-
-    with tab3:
-        render_detailed_records_tab(filtered_data)

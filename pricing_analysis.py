@@ -207,21 +207,16 @@ def load_pricing_analysis(vendor_pos_df, inbound_df):
     # Calculate price buckets (1 month, 3 months, 6 months, 12 months, 24 months)
     pricing_analysis['months_ago'] = ((TODAY - pricing_analysis['po_create_date']).dt.days / 30).astype(int)
 
-    def assign_price_bucket(months):
-        if months <= 1:
-            return '0-1 months'
-        elif months <= 3:
-            return '1-3 months'
-        elif months <= 6:
-            return '3-6 months'
-        elif months <= 12:
-            return '6-12 months'
-        elif months <= 24:
-            return '12-24 months'
-        else:
-            return '24+ months'
-
-    pricing_analysis['price_bucket'] = pricing_analysis['months_ago'].apply(assign_price_bucket)
+    # Vectorized bucket assignment for performance
+    conditions = [
+        pricing_analysis['months_ago'] <= 1,
+        pricing_analysis['months_ago'] <= 3,
+        pricing_analysis['months_ago'] <= 6,
+        pricing_analysis['months_ago'] <= 12,
+        pricing_analysis['months_ago'] <= 24
+    ]
+    choices = ['0-1 months', '1-3 months', '3-6 months', '6-12 months', '12-24 months']
+    pricing_analysis['price_bucket'] = np.select(conditions, choices, default='24+ months')
 
     # ===== STEP 9: Anomaly Detection Flags =====
     logs.append("INFO: Flagging anomalous purchases...")

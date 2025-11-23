@@ -1569,7 +1569,7 @@ def render_alternate_code_alerts(inventory_data, currency="USD"):
                 'Distribution': display_split['Codes']
             })
 
-            st.dataframe(display_df, hide_index=True, use_container_width=True)
+            st.dataframe(display_df, hide_index=True, width='stretch')
             st.caption("* indicates old/obsolete code | Priority: Use old code inventory first")
 
     else:
@@ -1836,7 +1836,7 @@ def render_inventory_page(inventory_data):
             data=excel_file,
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width='stretch',
             key="download_excel"
         )
         st.sidebar.caption(f"📊 {len(export_data):,} rows ready to export")

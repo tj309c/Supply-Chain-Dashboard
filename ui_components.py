@@ -31,9 +31,16 @@ def render_kpi_row(metrics_dict):
     cols = st.columns(len(metrics_dict))
     for idx, (label, data) in enumerate(metrics_dict.items()):
         with cols[idx]:
+            # Normalize empty / None metric values so the UI doesn't render blank cards
+            raw_value = data.get("value", "N/A")
+            if raw_value is None or (isinstance(raw_value, str) and str(raw_value).strip() == ""):
+                display_value = "N/A"
+            else:
+                display_value = raw_value
+
             st.metric(
                 label=label,
-                value=data.get("value", "N/A"),
+                value=display_value,
                 delta=data.get("delta"),
                 help=data.get("help")
             )

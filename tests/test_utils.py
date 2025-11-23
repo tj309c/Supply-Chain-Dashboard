@@ -23,14 +23,16 @@ class TestExcelExport:
             'col2': ['a', 'b', 'c']
         })
 
-        result = get_filtered_data_as_excel(df, "test_file.xlsx")
+        # Function now takes dictionary: {"sheet_name": (dataframe, include_index)}
+        result = get_filtered_data_as_excel({"Test Sheet": (df, False)})
         assert isinstance(result, bytes)
         assert len(result) > 0
 
     def test_get_filtered_data_as_excel_empty_dataframe(self):
         """Test Excel export with empty DataFrame"""
         df = pd.DataFrame()
-        result = get_filtered_data_as_excel(df, "empty.xlsx")
+        # Function now takes dictionary: {"sheet_name": (dataframe, include_index)}
+        result = get_filtered_data_as_excel({"Empty Sheet": (df, False)})
         assert isinstance(result, bytes)
 
     def test_get_filtered_data_as_excel_large_dataframe(self):
@@ -40,6 +42,7 @@ class TestExcelExport:
             'col2': ['value'] * 1000
         })
 
-        result = get_filtered_data_as_excel(df, "large.xlsx")
+        # Function now takes dictionary: {"sheet_name": (dataframe, include_index)}
+        result = get_filtered_data_as_excel({"Large Sheet": (df, False)})
         assert isinstance(result, bytes)
         assert len(result) > 0

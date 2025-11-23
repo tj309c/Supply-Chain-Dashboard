@@ -9,6 +9,7 @@ import sys
 import os
 import importlib
 from datetime import datetime
+import pytz
 
 # Import data loaders
 from data_loader import (
@@ -26,6 +27,7 @@ from data_loader import (
     load_vendor_performance,
     load_backorder_relief,
     load_stockout_prediction,
+    create_sku_description_lookup,
 )
 
 # Import pricing analysis
@@ -48,7 +50,6 @@ from pages.sku_mapping_page import render_sku_mapping_page
 from pages.vendor_page import render_vendor_page
 from pages.data_upload_page import render_data_upload_page
 from pages.inbound_page import render_inbound_page
-from pages.forecast_page import render_forecast_page
 from pages.debug_page import render_debug_page
 from pages.demand_page import show_demand_page
 
@@ -81,6 +82,11 @@ st.markdown("""
             border: 1px solid #e9ecef;
         }
 
+        /* Reduce metric font size slightly */
+        [data-testid="stMetric"] > div > div > div {
+            font-size: 18px !important;
+        }
+
         /* Better table styling */
         .dataframe {
             font-size: 0.9rem;
@@ -102,9 +108,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ===== DATA LOADING =====
+# Remove caching from load_all_data to fix CacheReplayClosureError
 
 def load_all_data(_progress_callback=None):
-    """Load all data sources with caching using optimized unified pattern
+    """Load all data sources with optimized unified pattern
 
     Args:
         _progress_callback: Optional callback function to report loading progress (underscore prefix = not hashed)
@@ -191,7 +198,12 @@ def load_all_data(_progress_callback=None):
 
         # Calculate pricing analysis (95%)
         update_progress(0.95, "Analyzing pricing and volume discounts...")
-        logs_pricing, pricing_analysis_df, vendor_discount_summary_df = load_pricing_analysis(vendor_pos_df, inbound_df)
+        pricing_data = load_pricing_analysis(vendor_pos_df, inbound_df)
+        if len(pricing_data) == 3:
+            logs_pricing, pricing_analysis_df, vendor_discount_summary_df = pricing_data
+        else:
+            logs_pricing, pricing_analysis_df = pricing_data
+            vendor_discount_summary_df = pd.DataFrame() # Assign a default empty DataFrame
 
         # Calculate backorder relief dates (97%)
         update_progress(0.97, "Calculating backorder relief dates...")
@@ -199,7 +211,21 @@ def load_all_data(_progress_callback=None):
 
         # Generate demand forecasts (99%)
         update_progress(0.99, "Generating demand forecasts...")
-        logs_demand, demand_forecast_df, demand_accuracy_df = generate_demand_forecast(deliveries_unified_df, forecast_horizon_days=90)
+        logs_demand, demand_forecast_df, demand_accuracy_df, daily_demand_df = generate_demand_forecast(
+            deliveries_unified_df,
+            master_data_df=master_data_df,
+            forecast_horizon_days=90
+        )
+
+        # Create SKU description lookup (99.5%)
+        update_progress(0.995, "Building SKU description lookup...")
+        sku_lookup = create_sku_description_lookup(
+            orders_item_lookup_df=orders_item_df,
+            inventory_df=inventory_data_df,
+            vendor_pos_df=vendor_pos_df,
+            deliveries_df=deliveries_unified_df,
+            inbound_df=inbound_df
+        )
 
         # Finalizing (100%)
         update_progress(1.0, "Ready!")
@@ -220,7 +246,10 @@ def load_all_data(_progress_callback=None):
             'vendor_discount_summary': vendor_discount_summary_df,
             'demand_forecast': demand_forecast_df,
             'demand_accuracy': demand_accuracy_df,
+            'daily_demand': daily_demand_df,  # Daily demand time series for visualization
             'deliveries': deliveries_unified_df,  # Add deliveries data for demand-based calculations
+            'orders_item_lookup': orders_item_df,  # Add orders item lookup for SKU descriptions
+            'sku_lookup': sku_lookup,  # SKU description lookup dictionary
             'load_time': datetime.now(),
             'load_time_str': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 
@@ -361,9 +390,14 @@ def main():
 
     # ===== SIDEBAR: QUICK ACTIONS =====
     st.sidebar.header("⚡ Quick Actions")
-    if st.sidebar.button("🔄 Refresh Data", use_container_width=True, help="Clear cache and reload all data from source files"):
+    if st.sidebar.button("🔄 Refresh Data", width='stretch', help="Clear cache and reload all data from source files"):
         st.cache_data.clear()
         st.rerun()
+
+    # Display dashboard time in EST
+    est = pytz.timezone('US/Eastern')
+    est_time = datetime.now(est)
+    st.markdown(f"<div style='font-size:16px; color:gray;'>Dashboard Time (EST): {est_time.strftime('%Y-%m-%d %H:%M:%S')}</div>", unsafe_allow_html=True)
 
     # Route to selected page
     if selected_page == "overview":
@@ -403,11 +437,19 @@ def main():
         show_demand_page(
             deliveries_df=data['deliveries'],
             demand_forecast_df=data['demand_forecast'],
-            forecast_accuracy_df=data['demand_accuracy']
+            forecast_accuracy_df=data['demand_accuracy'],
+            master_data_df=data.get('master_df', pd.DataFrame()),
+            daily_demand_df=data.get('daily_demand', pd.DataFrame())
         )
 
     elif selected_page == "forecasting":
-        render_forecast_page(orders_data=None, deliveries_data=None, master_data=None)
+        # Forecasting features have been consolidated into the Demand page
+        st.info("📊 Demand Forecasting features have been moved to the 'Demand Forecasting' page.")
+        st.markdown("Please use the **Demand Forecasting** page from the sidebar for:")
+        st.markdown("- Historical demand analysis and forecasting")
+        st.markdown("- Time-series visualizations")
+        st.markdown("- Forecast accuracy tracking")
+        st.markdown("- Forecast vs actual comparisons")
 
     elif selected_page == "inbound":
         render_inbound_page(inbound_data=None)

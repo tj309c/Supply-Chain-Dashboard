@@ -65,7 +65,7 @@ The dashboard integrates multiple data streams:
 
 4. **Launch the dashboard**
    ```bash
-   streamlit run dashboard.py
+   streamlit run dashboard_simple.py
    ```
 
 5. **Access the application**

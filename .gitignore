@@ -29,6 +29,7 @@ MANIFEST
 venv/
 ENV/
 env/
+.conda/
 
 # IDE
 .vscode/

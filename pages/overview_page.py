@@ -129,41 +129,80 @@ def calculate_overview_metrics(service_data, backorder_data, inventory_data):
     return metrics
 
 def render_service_level_chart(service_data):
-    """Render service level trend chart"""
-    if service_data.empty or 'ship_month' not in service_data.columns:
+    """Render service level trend chart with separate lines for each year"""
+    if service_data.empty or 'ship_month' not in service_data.columns or 'ship_year' not in service_data.columns:
         return None
 
-    # Group by month
-    monthly = service_data.groupby('ship_month').agg({
+    # Group by year and month
+    monthly = service_data.groupby(['ship_year', 'ship_month_num']).agg({
         'on_time': ['sum', 'count']
     }).reset_index()
 
-    monthly.columns = ['month', 'on_time_count', 'total_count']
+    monthly.columns = ['year', 'month_num', 'on_time_count', 'total_count']
     monthly['on_time_pct'] = (monthly['on_time_count'] / monthly['total_count'] * 100)
 
-    # Sort by month
-    monthly = monthly.sort_values('month')
+    # Sort by year and month
+    monthly = monthly.sort_values(['year', 'month_num'])
 
-    # Create chart
+    # Calculate overall on-time % for each year
+    yearly_avg = service_data.groupby('ship_year').agg({
+        'on_time': ['sum', 'count']
+    }).reset_index()
+    yearly_avg.columns = ['year', 'on_time_count', 'total_count']
+    yearly_avg['avg_on_time_pct'] = (yearly_avg['on_time_count'] / yearly_avg['total_count'] * 100)
+
+    # Create chart with separate traces for each year
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(
-        x=monthly['month'],
-        y=monthly['on_time_pct'],
-        mode='lines+markers',
-        name='On-Time %',
-        line=dict(color='#2E86AB', width=3),
-        marker=dict(size=8)
-    ))
+    # Get unique years and limit to last 3 years if there are more than 3
+    all_years = sorted(monthly['year'].unique())
+    years = all_years[-3:] if len(all_years) > 3 else all_years
+
+    # Filter monthly data to only include selected years
+    monthly = monthly[monthly['year'].isin(years)]
+    yearly_avg = yearly_avg[yearly_avg['year'].isin(years)]
+
+    # Color palette for different years
+    colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#3B4D61', '#6B9AC4']
+
+    for i, year in enumerate(years):
+        year_data = monthly[monthly['year'] == year]
+        color = colors[i % len(colors)]
+
+        # Create x-axis labels as "Month Year"
+        x_labels = [f"{pd.to_datetime(f'{year}-{month:02d}-01').strftime('%b %Y')}" for month in year_data['month_num']]
+
+        # Add monthly trend line
+        fig.add_trace(go.Scatter(
+            x=x_labels,
+            y=year_data['on_time_pct'],
+            mode='lines+markers',
+            name=f'{year}',
+            line=dict(color=color, width=3),
+            marker=dict(size=8, color=color)
+        ))
+
+        # Add year average as horizontal line for this year's months
+        year_avg_pct = yearly_avg[yearly_avg['year'] == year]['avg_on_time_pct'].values[0]
+        fig.add_trace(go.Scatter(
+            x=x_labels,
+            y=[year_avg_pct] * len(x_labels),
+            mode='lines',
+            name=f'{year} Avg ({year_avg_pct:.1f}%)',
+            line=dict(color=color, width=2, dash='dot'),
+            showlegend=True,
+            hovertemplate=f'Year {year} Average: {year_avg_pct:.1f}%<extra></extra>'
+        ))
 
     # Add target line
     fig.add_hline(y=95, line_dash="dash", line_color="green", annotation_text="Target: 95%")
 
     fig.update_layout(
-        title="Service Level Trend",
+        title="Service Level Trend by Year",
         xaxis_title="Month",
         yaxis_title="On-Time Delivery %",
-        yaxis_range=[0, 100]
+        yaxis_range=[0, 100],
+        legend_title="Year"
     )
 
     return fig
@@ -313,7 +352,7 @@ def render_overview_page(service_data, backorder_data, inventory_data):
             st.dataframe(
                 customer_backorders,
                 hide_index=True,
-                use_container_width=True
+                width='stretch'
             )
 
     # Critical Stock SKUs
@@ -343,5 +382,5 @@ def render_overview_page(service_data, backorder_data, inventory_data):
                     st.dataframe(
                         critical_display,
                         hide_index=True,
-                        use_container_width=True
+                        width='stretch'
                     )

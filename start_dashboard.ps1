@@ -200,13 +200,35 @@ Write-Host "INVENTORY: $env:INVENTORY_FILE_PATH`n"
 
 switch ($Action) {
     'Run' {
+        # Auto-check and install requirements
+        Write-Info 'Checking and installing dependencies...'
+        if (Test-Path (Join-Path $ScriptDir 'requirements.txt')) {
+            & python -m pip install --quiet -r (Join-Path $ScriptDir 'requirements.txt')
+            if ($LASTEXITCODE -eq 0) {
+                Write-Info 'Dependencies installed/verified successfully.'
+            } else {
+                Write-Warn 'Some dependencies may not have installed correctly.'
+            }
+        }
+
         Write-Info 'Launching Streamlit (headless)'
-        & python -m streamlit run (Join-Path $ScriptDir 'dashboard.py') --server.port 8501 --server.headless true
+        & python -m streamlit run (Join-Path $ScriptDir 'dashboard_simple.py') --server.port 8501 --server.headless true
         if ($LASTEXITCODE -ne 0) { Write-Err 'Streamlit exited with an error. Try running manually.'; exit $LASTEXITCODE }
     }
     'Dev' {
+        # Auto-check and install requirements
+        Write-Info 'Checking and installing dependencies...'
+        if (Test-Path (Join-Path $ScriptDir 'requirements.txt')) {
+            & python -m pip install --quiet -r (Join-Path $ScriptDir 'requirements.txt')
+            if ($LASTEXITCODE -eq 0) {
+                Write-Info 'Dependencies installed/verified successfully.'
+            } else {
+                Write-Warn 'Some dependencies may not have installed correctly.'
+            }
+        }
+
         Write-Info 'Launching Streamlit (dev mode: not headless)'
-        & python -m streamlit run (Join-Path $ScriptDir 'dashboard.py') --server.port 8501 --server.headless false
+        & python -m streamlit run (Join-Path $ScriptDir 'dashboard_simple.py') --server.port 8501 --server.headless false
         if ($LASTEXITCODE -ne 0) { Write-Err 'Streamlit exited with an error. Try running manually.'; exit $LASTEXITCODE }
     }
     default {

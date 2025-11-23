@@ -307,7 +307,7 @@ def render_open_po_table(po_data):
         st.dataframe(
             styled_df,
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             height=500
         )
 
@@ -318,7 +318,7 @@ def render_open_po_table(po_data):
             data=csv,
             file_name=f"open_pos_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
-            use_container_width=True
+            width='stretch'
         )
 
 
@@ -447,7 +447,7 @@ def render_vendor_performance_tab(vendor_performance):
         st.dataframe(
             vendor_display,
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             height=500
         )
 
@@ -594,7 +594,7 @@ def render_pricing_analysis_tab(pricing_analysis, vendor_discount_summary):
 
     st.dataframe(
         scorecard_display.style.applymap(color_score, subset=['Consistency Score']),
-        use_container_width=True
+        width='stretch'
     )
 
     st.divider()
@@ -617,7 +617,7 @@ def render_pricing_analysis_tab(pricing_analysis, vendor_discount_summary):
             worst_display['Qty-Price Correlation'] = worst_display['Qty-Price Correlation'].round(2)
             worst_display['Price Variance %'] = worst_display['Price Variance %'].round(1)
 
-            st.dataframe(worst_display, use_container_width=True)
+            st.dataframe(worst_display, width='stretch')
 
         with col2:
             st.markdown("#### Vendor Comparison Chart")
@@ -683,7 +683,7 @@ def render_pricing_analysis_tab(pricing_analysis, vendor_discount_summary):
         best_display['Discount Score'] = best_display['Discount Score'].round(1)
         best_display['Qty-Price Correlation'] = best_display['Qty-Price Correlation'].round(2)
 
-        st.dataframe(best_display, use_container_width=True)
+        st.dataframe(best_display, width='stretch')
 
     with col2:
         st.markdown("#### Worst Volume Discounters")
@@ -695,7 +695,7 @@ def render_pricing_analysis_tab(pricing_analysis, vendor_discount_summary):
         worst_disc_display['Discount Score'] = worst_disc_display['Discount Score'].round(1)
         worst_disc_display['Qty-Price Correlation'] = worst_disc_display['Qty-Price Correlation'].round(2)
 
-        st.dataframe(worst_disc_display, use_container_width=True)
+        st.dataframe(worst_disc_display, width='stretch')
 
     st.divider()
 
@@ -908,7 +908,7 @@ def render_pricing_analysis_tab(pricing_analysis, vendor_discount_summary):
 
             if elasticity_summary:
                 elasticity_df = pd.DataFrame(elasticity_summary)
-                st.dataframe(elasticity_df, use_container_width=True)
+                st.dataframe(elasticity_df, width='stretch')
             else:
                 st.info("Not enough data points to calculate elasticity for selected vendors.")
 
@@ -1015,7 +1015,7 @@ def render_at_risk_pos_tab(po_data):
             st.dataframe(
                 styled_df,
                 hide_index=True,
-                use_container_width=True,
+                width='stretch',
                 height=500
             )
 

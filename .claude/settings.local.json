@@ -9,7 +9,19 @@
       "Bash(powershell:*)",
       "Bash(test_output.txt)",
       "Bash(cat:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(taskkill:*)",
+      "Bash(nul)",
+      "Bash(timeout /t 2 /nobreak)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(pytest:*)",
+      "Bash(timeout 30 bash:*)",
+      "Bash(find:*)",
+      "Bash(dir:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

@@ -124,7 +124,7 @@ def render_inbound_page(inbound_data=None):
             yaxis_range=[0, 100],
             height=400
         )
-        st.plotly_chart(fig_otd, use_container_width=True)
+        st.plotly_chart(fig_otd, width='stretch')
 
     with col2:
         # Lead Time Chart (Sample)
@@ -142,7 +142,7 @@ def render_inbound_page(inbound_data=None):
             yaxis_title="Days",
             height=400
         )
-        st.plotly_chart(fig_lead, use_container_width=True)
+        st.plotly_chart(fig_lead, width='stretch')
 
     # PO Status Distribution (Sample)
     st.divider()
@@ -168,7 +168,7 @@ def render_inbound_page(inbound_data=None):
                 'Delayed': 'red'
             }
         )
-        st.plotly_chart(fig_po_count, use_container_width=True)
+        st.plotly_chart(fig_po_count, width='stretch')
 
     with col2:
         fig_po_value = px.pie(
@@ -184,7 +184,7 @@ def render_inbound_page(inbound_data=None):
                 'Delayed': 'red'
             }
         )
-        st.plotly_chart(fig_po_value, use_container_width=True)
+        st.plotly_chart(fig_po_value, width='stretch')
 
     # ===== SAMPLE KPI LAYOUT =====
     st.divider()
@@ -228,7 +228,7 @@ def render_inbound_page(inbound_data=None):
 
     st.dataframe(
         sample_po_data,
-        use_container_width=True,
+        width='stretch',
         hide_index=True
     )
 

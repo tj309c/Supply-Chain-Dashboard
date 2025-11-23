@@ -1,51 +1,42 @@
-<!-- Auto-generated guidance for AI coding agents working on this repo. Keep it short and actionable. -->
+
+
+
+
+<!-- Concise quick-start for AI coding agents working on this repo -->
 # Copilot / AI assistant quick-start (Supply Chain Dashboard)
 
-This file contains concise, repository-specific knowledge to help AI coding agents make high‑quality, context-aware edits.
+This project is a Streamlit-based supply-chain analytics dashboard. Keep guidance short — the source and tests are the best references.
 
-Key components (big picture)
-- Frontend: `dashboard.py` — a Streamlit single-file app that ties UI, caching and user workflows together.
-- Data layer: `data_loader.py` — a set of focused loader functions (master, orders header/item, deliveries, backorders, inventory, lead-times). Loaders return (logs, dataframe, error_df) or similar tuples; check the function signature before changing.
-- IO helper: `file_loader.py` — `safe_read_csv` chooses between disk path and Streamlit-uploaded file buffers (uses `st.session_state.uploaded_files`). Tests often monkeypatch `pd.read_csv` rather than using Streamlit state.
-- Utilities: `utils.py` — Excel exports, enrichment helpers, caching helpers (lazy-loading pattern).
+What matters (big picture)
+- Main UI: `dashboard_simple.py` (preferred). Pages live in `pages/` (small, testable modules).
+- ETL layer: `data_loader.py` holds the canonical loaders. Big pattern: "unified" readers (load_orders_unified / load_deliveries_unified) -> light-weight processors (item/header loaders). Legacy wrappers exist for backward compatibility.
+- IO: `file_loader.py` provides `safe_read_csv()` which checks `st.session_state.uploaded_files` first and falls back to disk. Tests instead monkeypatch `pd.read_csv` (see `tests/conftest.py`).
 
-Developer workflows (concrete commands)
-- Install deps: `pip install -r requirements.txt`
-- Run app locally: `streamlit run dashboard.py` (default port 8501). It reads CSVs from `data/` unless environment variables are set.
-- Set file overrides (example envs):
-  - `ORDERS_FILE_PATH`, `DELIVERIES_FILE_PATH`, `MASTER_DATA_FILE_PATH`, `INVENTORY_FILE_PATH`
-- Run quick validators/debuggers: `python inventory_validator.py` (exists). README mentions other debug scripts (e.g. `debug_service_level.py`) — those may be missing; prefer running unit tests if unsure.
-- Run tests: `pytest test_data_loader.py` (tests mock `pd.read_csv` to validate loader logic).
+Key conventions for edits
+- Loader signatures: most loader functions return logs + dataframe and often an error_df: (logs, df, error_df) — verify before changing call sites.
+- Date handling: loaders consistently parse dates using explicit format '%m/%d/%y'; tests and logic expect that format.
+- Performance: avoid duplicate pd.read_csv — use the unified-read pattern; prefer vectorized ops and limited groupby keys for speed.
+- Caching/UI: use `@st.cache_data` for expensive loaders and `get_cached_report_data` for the "lazy filter" pattern used across pages.
 
-Important repository-specific conventions & patterns
-- Data loaders are defensive and performance-minded:
-  - Prefer `usecols` on pd.read_csv and lightweight aggregation to improve speed.
-  - Date parsing uses an explicit format (`%m/%d/%y`) for reliability — check/keep this when editing.
-  - Loaders typically return diagnostic logs, a DataFrame, and an error DataFrame — preserve this API if possible.
-- File I/O is Streamlit-aware: `safe_read_csv()` first checks `st.session_state.uploaded_files` then falls back to disk.
-  - When editing loader tests, use monkeypatching of `pd.read_csv` (that's how existing tests inject in-memory CSVs).
-- Caching and interactive UX are centered on Streamlit patterns:
-  - Use `@st.cache_data` for expensive reads.
-  - The app uses session state and a "lazy filter" pattern: filters are only applied when the user clicks `Apply Filters` (see `get_lazy_filtered_data` and `get_cached_report_data`). Respect this pattern when changing UI or data flows.
-- Export / formatting helpers: `get_filtered_data_as_excel` and `get_filtered_data_as_excel_with_metadata` — they attempt to be memory efficient and handle datetime formatting.
+Tests and fixtures (important)
+- Tests are in `tests/`. `tests/conftest.py` uses an autouse fixture `mock_read_csv` that intercepts `pd.read_csv` and returns StringIO for filenames: master_data.csv, orders.csv, deliveries.csv, inventory.csv. Use/inspect these mocks when adding tests.
+- When adding tests, follow existing fixtures or use a focused monkeypatch for pd.read_csv. Avoid reliance on streamlit session_state during tests.
 
-Areas to be careful about
-- Don't assume `st.session_state` exists when running code outside Streamlit (tests). Use `file_loader.get_file_source` logic or mock `pd.read_csv` in tests.
-- Several README-listed debug scripts referenced in the README may not be present in the tree — double-check before linking or editing README.
-- Many functions accept and return structured tuples (logs, df, error_df). Changing these signatures requires updating callers across `dashboard.py` and tests.
+Dev workflows (concrete commands, Windows CMD)
+- Install deps: pip install -r requirements.txt
+- Run app: streamlit run dashboard_simple.py (or use start_dashboard.bat/start_dashboard_dev.bat)
+- Run tests: pytest -q  (or target files like pytest tests/test_data_loaders.py -q)
 
-Quick examples to copy while editing
-- Run dashboard locally with local data (Windows CMD):
-  ```cmd
-  pip install -r requirements.txt
-  streamlit run dashboard.py
-  ```
-- Run the unit tests for data loaders:
-  ```cmd
-  pip install -r requirements.txt
-  pytest test_data_loader.py -q
-  ```
+Where to look when editing
+- For data loading patterns: `data_loader.py` (look for unified loaders + item/header split)
+- For file I/O behavior: `file_loader.py` (safe_read_csv, get_file_source)
+- For caching / UI patterns: `utils.py` and `dashboard_simple.py`.
+- For examples & intended behavior: tests in `tests/` are authoritative; read `tests/conftest.py` first.
 
-If anything looks missing or unclear (for example README references to missing debug scripts), ask a human before deleting or refactoring the corresponding references — they may be intentionally omitted from the repo you received.
+If anything is missing or unclear here, tell me which area you'd like expanded (more tests, onboarding, or example edits).  
+
+If anything looks missing or unclear (for example README references to debug scripts), ask a human before deleting or refactoring — some scripts are intentionally omitted or environment-specific.
+
+— end of file —
 
 — end of file —

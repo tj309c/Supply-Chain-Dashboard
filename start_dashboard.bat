@@ -68,34 +68,61 @@ if exist "%~dp0requirements.txt" (
 goto end
 
 :run_app
+REM Auto-install requirements before starting (quick check)
+echo Checking and installing dependencies...
+if exist "%~dp0requirements.txt" (
+  python -m pip install --quiet -r "%~dp0requirements.txt"
+  if errorlevel 1 (
+    echo Warning: Some dependencies may not have installed correctly.
+  ) else (
+    echo Dependencies installed/verified successfully.
+  )
+) else (
+  echo Warning: requirements.txt not found in %~dp0
+)
+
 REM Export environment variables for this CMD session only. Streamlit will read them.
 set ORDERS_FILE_PATH=%ORDERS_FILE_PATH%
 set DELIVERIES_FILE_PATH=%DELIVERIES_FILE_PATH%
 set MASTER_DATA_FILE_PATH=%MASTER_DATA_FILE_PATH%
 set INVENTORY_FILE_PATH=%INVENTORY_FILE_PATH%
 
+echo.
 echo Starting Supply Chain Dashboard (Streamlit) ...
 echo ORDERS: %ORDERS_FILE_PATH%
 echo DELIVERIES: %DELIVERIES_FILE_PATH%
 echo MASTER_DATA: %MASTER_DATA_FILE_PATH%
 echo INVENTORY: %INVENTORY_FILE_PATH%
+echo.
 
 REM Prefer using python -m streamlit to avoid PATH issues
-python -m streamlit run "%~dp0dashboard.py" --server.port 8501 --server.headless true
+python -m streamlit run "%~dp0dashboard_simple.py" --server.port 8501 --server.headless true
 if errorlevel 1 (
   echo Streamlit exited with a non-zero status.
-  echo Try running: python -m streamlit run dashboard.py
+  echo Try running: python -m streamlit run dashboard_simple.py
 )
 goto end
 
 :run_dev
+REM Auto-install requirements before starting (quick check)
+echo Checking and installing dependencies...
+if exist "%~dp0requirements.txt" (
+  python -m pip install --quiet -r "%~dp0requirements.txt"
+  if errorlevel 1 (
+    echo Warning: Some dependencies may not have installed correctly.
+  ) else (
+    echo Dependencies installed/verified successfully.
+  )
+)
+
 set ORDERS_FILE_PATH=%ORDERS_FILE_PATH%
 set DELIVERIES_FILE_PATH=%DELIVERIES_FILE_PATH%
 set MASTER_DATA_FILE_PATH=%MASTER_DATA_FILE_PATH%
 set INVENTORY_FILE_PATH=%INVENTORY_FILE_PATH%
 
+echo.
 echo Starting Dashboard in DEV mode (not headless) ...
-python -m streamlit run "%~dp0dashboard.py" --server.port 8501 --server.headless false
+python -m streamlit run "%~dp0dashboard_simple.py" --server.port 8501 --server.headless false
 goto end
 
 :end

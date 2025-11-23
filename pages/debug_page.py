@@ -105,7 +105,7 @@ def render_debug_page(debug_info):
         if error_key in debug_info and debug_info[error_key] is not None and not debug_info[error_key].empty:
             has_errors = True
             with st.expander(f"⚠️ {section_name}", expanded=True):
-                st.dataframe(debug_info[error_key], hide_index=True, use_container_width=True)
+                st.dataframe(debug_info[error_key], hide_index=True, width='stretch')
 
     if not has_errors:
         st.success("✅ No errors detected in data loading!")
@@ -128,7 +128,7 @@ def render_debug_page(debug_info):
             })
 
     if shape_info:
-        st.dataframe(pd.DataFrame(shape_info), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(shape_info), hide_index=True, width='stretch')
 
     st.divider()
 
@@ -162,7 +162,7 @@ def render_debug_page(debug_info):
 
         # Sample data
         st.subheader("Sample Data (First 5 Rows)")
-        st.dataframe(df.head(5), use_container_width=True)
+        st.dataframe(df.head(5), width='stretch')
     else:
         st.warning(f"Dataset '{dataset_selector}' not available.")
 

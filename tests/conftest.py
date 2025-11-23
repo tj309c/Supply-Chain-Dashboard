@@ -21,13 +21,14 @@ def mock_master_data_csv():
     - Multiple SKUs and categories
     - Duplicate SKU to test deduplication
     - Various product descriptions
+    - Activation dates and PLM fields
     """
-    csv_data = """Material Number,PLM: Level Classification 4,Material Description
-101,CAT-A,PRODUCT-A-DESC
-102,CAT-A,PRODUCT-B-DESC
-103,CAT-B,PRODUCT-C-DESC
-104,CAT-C,PRODUCT-D-DESC
-101,CAT-A,PRODUCT-A-DESC-UPDATED
+    csv_data = """Material Number,PLM: Level Classification 4,Activation Date (Code),PLM: PLM Current Status,PLM: Expiration Date
+101,CAT-A,1/1/23,Active,20251231
+102,CAT-A,2/1/23,Active,20261231
+103,CAT-B,3/1/23,Active,20271231
+104,CAT-C,4/1/23,Active,20281231
+101,CAT-A,1/1/23,Active,20251231
 """
     return "master_data.csv", io.StringIO(csv_data)
 
@@ -87,11 +88,11 @@ def mock_inventory_csv():
     """
     Creates mock inventory CSV for testing inventory analysis
     """
-    csv_data = """Material Number,POP Actual Stock Qty
-101,1000
-102,500
-103,2500
-104,750
+    csv_data = """Material Number,POP Actual Stock Qty,POP Actual Stock in Transit Qty,POP Last Purchase: Price in Purch. Currency,POP Last Purchase: Currency,Storage Location: Code,Material Description,Brand,POP Last Purchase: Date
+101,1000,100,50.00,USD,WH01,PRODUCT-A,BRAND-A,1/1/24
+102,500,50,75.00,USD,WH01,PRODUCT-B,BRAND-A,2/1/24
+103,2500,250,25.00,EUR,WH02,PRODUCT-C,BRAND-B,3/1/24
+104,750,75,100.00,GBP,WH01,PRODUCT-D,BRAND-C,4/1/24
 """
     return "inventory.csv", io.StringIO(csv_data)
 

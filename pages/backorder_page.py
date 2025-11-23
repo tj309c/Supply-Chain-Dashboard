@@ -1025,7 +1025,7 @@ def render_alternate_code_opportunities(backorder_data, inventory_data):
                 'Order': display_df['order']
             })
 
-            st.dataframe(display_table, hide_index=True, use_container_width=True)
+            st.dataframe(display_table, hide_index=True, width='stretch')
 
             st.caption("**Business Rule:** Prioritize using old code inventory first before new code inventory")
 
@@ -1108,7 +1108,7 @@ def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
         showlegend=False
     )
 
-    st.plotly_chart(fig_buckets, use_container_width=True)
+    st.plotly_chart(fig_buckets, width='stretch')
 
     st.divider()
 
@@ -1133,7 +1133,7 @@ def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
             }
         )
         fig_confidence.update_layout(height=350)
-        st.plotly_chart(fig_confidence, use_container_width=True)
+        st.plotly_chart(fig_confidence, width='stretch')
 
     with col2:
         # Vendor OTIF distribution for backorders with PO coverage
@@ -1147,7 +1147,7 @@ def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
                 labels={'vendor_otif_pct': 'Vendor OTIF %', 'count': 'Number of Backorders'}
             )
             fig_otif.update_layout(height=350)
-            st.plotly_chart(fig_otif, use_container_width=True)
+            st.plotly_chart(fig_otif, width='stretch')
         else:
             st.info("No backorders with PO coverage")
 
@@ -1182,7 +1182,7 @@ def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
         if 'Vendor OTIF %' in display_df.columns:
             display_df['Vendor OTIF %'] = display_df['Vendor OTIF %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
 
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width='stretch', hide_index=True)
     else:
         st.success("✅ No critical gaps - all backorders have reliable PO coverage")
 
@@ -1224,7 +1224,7 @@ def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
                 yaxis={'categoryorder': 'total ascending'}
             )
 
-            st.plotly_chart(fig_gantt, use_container_width=True)
+            st.plotly_chart(fig_gantt, width='stretch')
 
             # Detailed table
             st.markdown("#### Detailed Relief Schedule")
@@ -1248,7 +1248,7 @@ def render_relief_timeline_tab(backorder_relief_data, relief_metrics):
             if 'Expected Relief Date' in timeline_display.columns:
                 timeline_display['Expected Relief Date'] = pd.to_datetime(timeline_display['Expected Relief Date']).dt.strftime('%Y-%m-%d')
 
-            st.dataframe(timeline_display, use_container_width=True, hide_index=True)
+            st.dataframe(timeline_display, width='stretch', hide_index=True)
         else:
             st.info("No backorders expected to be relieved in the next 60 days")
     else:
@@ -1320,7 +1320,7 @@ def render_overview_analysis_tab(filtered_data):
                     showlegend=True
                 )
 
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, width='stretch')
 
             with col2:
                 st.markdown("### Top SKUs by Root Cause")
@@ -1341,7 +1341,7 @@ def render_overview_analysis_tab(filtered_data):
                     top_skus['Avg Days'] = top_skus['Avg Days'].round(1)
 
                     st.markdown(f"**Root Cause: {top_cause}**")
-                    st.dataframe(top_skus, use_container_width=True, hide_index=True)
+                    st.dataframe(top_skus, width='stretch', hide_index=True)
 
             # Root Cause Recommendations
             st.divider()
@@ -1391,7 +1391,7 @@ def render_overview_analysis_tab(filtered_data):
                     '90d Demand': top_customers['total_demand_90d'].astype(int)
                 })
 
-                st.dataframe(display_table, use_container_width=True, hide_index=True)
+                st.dataframe(display_table, width='stretch', hide_index=True)
 
             with col2:
                 st.markdown("### Customer Impact Metrics")
@@ -1451,7 +1451,7 @@ def render_overview_analysis_tab(filtered_data):
                     'Avg Days on BO': top_skus['avg_days_on_backorder'].round(1)
                 })
 
-                st.dataframe(display_table, use_container_width=True, hide_index=True)
+                st.dataframe(display_table, width='stretch', hide_index=True)
 
             with col2:
                 st.markdown("### SKU Criticality Metrics")
@@ -1541,7 +1541,7 @@ def render_summaries_tab(filtered_data):
     customer_summary.columns = ['Customer', 'Total Units', 'Order Count', 'Avg Age (days)']
     customer_summary['Avg Age (days)'] = customer_summary['Avg Age (days)'].round(1)
 
-    st.dataframe(customer_summary, use_container_width=True, hide_index=True)
+    st.dataframe(customer_summary, width='stretch', hide_index=True)
 
     st.divider()
 
@@ -1556,7 +1556,7 @@ def render_summaries_tab(filtered_data):
     sku_summary.columns = ['SKU', 'Product Name', 'Total Units', 'Order Count', 'Avg Age (days)']
     sku_summary['Avg Age (days)'] = sku_summary['Avg Age (days)'].round(1)
 
-    st.dataframe(sku_summary, use_container_width=True, hide_index=True)
+    st.dataframe(sku_summary, width='stretch', hide_index=True)
 
 def render_fulfillment_opportunities_tab(filtered_data, inventory_data):
     """Render Fulfillment Opportunities tab content"""
@@ -1613,7 +1613,7 @@ def render_stockout_risk_tab(stockout_risk_data):
     if not critical_items.empty:
         display_cols = ['sku', 'on_hand_qty', 'daily_demand', 'days_until_stockout',
                        'risk_level', 'reorder_point', 'safety_stock', 'has_po_coverage']
-        st.dataframe(critical_items[display_cols], use_container_width=True, height=400)
+        st.dataframe(critical_items[display_cols], width='stretch', height=400)
     else:
         st.success("No critical at-risk items found!")
 
@@ -1626,7 +1626,7 @@ def render_stockout_risk_tab(stockout_risk_data):
     if not reorder_recs.empty:
         display_cols = ['sku', 'risk_level', 'days_until_stockout', 'on_hand_qty',
                        'reorder_point', 'recommended_order_qty', 'has_po_coverage']
-        st.dataframe(reorder_recs[display_cols], use_container_width=True, height=400)
+        st.dataframe(reorder_recs[display_cols], width='stretch', height=400)
 
         st.caption(f"Showing {len(reorder_recs)} SKUs that should be reordered (risk level: Moderate or higher)")
     else:
@@ -1798,7 +1798,7 @@ def render_backorder_page(backorder_data, backorder_relief_data=None, stockout_r
             data=excel_file,
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            width='stretch'
         )
         st.sidebar.caption(f"📊 {len(export_data):,} rows ready to export")
 

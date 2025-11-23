@@ -74,8 +74,22 @@ def calculate_backorder_relief_dates(backorder_df, vendor_pos_df, vendor_perform
     if 'expected_delivery_date' in open_pos.columns:
         open_pos['expected_delivery_date'] = pd.to_datetime(open_pos['expected_delivery_date'], errors='coerce')
     else:
-        logs.append("WARNING: No expected_delivery_date in PO data - using po_create_date + 30 days estimate")
-        open_pos['expected_delivery_date'] = pd.to_datetime(open_pos['po_create_date']) + timedelta(days=30)
+        logs.append("ERROR: No expected_delivery_date in PO data - cannot calculate relief dates without real expected delivery dates")
+        logs.append("INFO: Relief analysis requires expected_delivery_date column in vendor PO data")
+        # Return empty result - NO FAKE DATA
+        result = backorder_df.copy()
+        result['has_po_coverage'] = False
+        result['relieving_po_number'] = None
+        result['po_expected_delivery'] = None
+        result['vendor_name'] = None
+        result['vendor_otif_pct'] = 0.0
+        result['vendor_avg_delay_days'] = 0
+        result['vendor_adjusted_delivery_date'] = None
+        result['days_until_relief'] = np.inf
+        result['relief_confidence'] = 'No PO'
+        result['is_high_risk'] = True
+        result['relief_bucket'] = 'No PO'
+        return logs, result
 
     # ===== STEP 2: Match Backorders to POs by SKU =====
     logs.append("INFO: Matching backorders to purchase orders by SKU...")

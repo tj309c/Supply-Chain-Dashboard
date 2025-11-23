@@ -26,10 +26,9 @@ class TestSafeReadCSV:
         assert not df.empty
 
     def test_safe_read_csv_nonexistent_file(self):
-        """Test reading a non-existent file returns empty DataFrame"""
-        df = safe_read_csv(None, "nonexistent_file.csv")
-        assert isinstance(df, pd.DataFrame)
-        # Should return empty DataFrame or raise exception
+        """Test reading a non-existent file raises FileNotFoundError"""
+        with pytest.raises(FileNotFoundError):
+            safe_read_csv(None, "nonexistent_file.csv")
 
     def test_safe_read_csv_with_usecols(self):
         """Test reading with specific columns"""

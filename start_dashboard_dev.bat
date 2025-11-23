@@ -110,7 +110,8 @@ echo MASTER_DATA: %MASTER_DATA_FILE_PATH%
 echo INVENTORY: %INVENTORY_FILE_PATH%
 
 REM Run Streamlit in dev mode (not headless)
-python -m streamlit run "%ROOT%dashboard.py" --server.port 8501 --server.headless false
+REM NOTE: `dashboard.py` was removed/legacy. Use `dashboard_simple.py` which is the current app.
+python -m streamlit run "%ROOT%dashboard_simple.py" --server.port 8501 --server.headless false
 if errorlevel 1 (
   echo Streamlit exited with non-zero status. Try running: python -m streamlit run dashboard.py
 )
