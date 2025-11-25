@@ -118,14 +118,28 @@ def load_deliveries_unified(deliveries_path, file_key='deliveries'):
     all_delivery_cols = [
         "Deliveries Detail - Order Document Number",
         "Item - SAP Model Code",
+        # time-of-day fields (Eastern Time) — optional
+        "Deliveries Dates - Delivery Creation Time",
+        "Deliveries Dates - Goods Issue Time",
+        "Goods Issue Date: Date",  # NEW field - prefer goods issue if present
         "Delivery Creation Date: Date",
         "Deliveries - TOTAL Goods Issue Qty",
         "Item - Model Desc"
     ]
 
     try:
-        df = safe_read_csv(file_key, deliveries_path, usecols=all_delivery_cols, low_memory=False)
-        logs.append(f"INFO: Loaded {len(df)} rows from DELIVERIES.csv (unified read).")
+        # Attempt to read only the required columns first (fast-path). Some files may not include the optional
+        # 'Goods Issue Date: Date' field, so if usecols fails, fall back to reading the full file and selecting
+        # the available columns.
+        try:
+            df = safe_read_csv(file_key, deliveries_path, usecols=all_delivery_cols, low_memory=False)
+            logs.append(f"INFO: Loaded {len(df)} rows from DELIVERIES.csv (unified read - selected cols).")
+        except Exception:
+            logs.append("WARN: Could not read deliveries with strict usecols — falling back to permissive read.")
+            df = safe_read_csv(file_key, deliveries_path, low_memory=False)
+            # Only keep columns we care about (if present)
+            df = df[[c for c in all_delivery_cols if c in df.columns]]
+            logs.append(f"INFO: Loaded {len(df)} rows from DELIVERIES.csv (unified read - fallback).")
     except Exception as e:
         logs.append(f"ERROR: Failed to read 'DELIVERIES.csv': {e}")
         return logs, pd.DataFrame()
@@ -278,11 +292,13 @@ def load_orders_item_lookup(orders_df_unified):
     # --- ENHANCEMENT: Robustly clean whitespace from key categorical columns ---
     # This prevents filter mismatches caused by hidden spaces.
     # .str.strip() removes leading/trailing spaces.
-    # .str.replace(r'\s+', ' ', regex=True) replaces multiple internal spaces with a single space.
+    # .str.replace(r'\\s+', ' ', regex=True) replaces multiple internal spaces with a single space.
     str_strip_cols = ['sales_org', 'customer_name', 'product_name', 'reject_reason', 'order_type', 'order_reason']
     for col in str_strip_cols:
         if col in df.columns:
             df[col] = clean_string_column(df[col])
+    
+    
 
     # --- OPTIMIZATION: Reduce groupby complexity for significant speedup ---
     # Drop rows where essential grouping keys are missing before aggregation
@@ -313,6 +329,12 @@ def load_orders_item_lookup(orders_df_unified):
         error_df = df_agg[date_fail_mask] 
     
     df_agg.dropna(subset=['order_date'], inplace=True)
+
+    # OPTIMIZATION #3: Convert categorical columns to category dtype for memory savings
+    categorical_cols = ['sales_org', 'customer_name', 'product_name', 'reject_reason', 'order_type', 'order_reason']
+    for col in categorical_cols:
+        if col in df_agg.columns:
+            df_agg[col] = df_agg[col].astype('category')
     logs.append(f"INFO: {len(df_agg)} rows remaining after dropping NaNs.")
 
     
@@ -377,6 +399,12 @@ def load_orders_header_lookup(orders_df_unified):
     df_agg.dropna(subset=['order_date'], inplace=True)
     logs.append(f"INFO: {len(df_agg)} unique, valid orders found.")
     
+    # OPTIMIZATION #3: Convert categorical columns to category dtype for memory savings
+    categorical_cols = ['customer_name', 'order_type', 'order_reason', 'sales_org']
+    for col in categorical_cols:
+        if col in df_agg.columns:
+            df_agg[col] = df_agg[col].astype('category')
+    
     if df_agg.empty:
         logs.append("ERROR: No valid order header data remained after processing.")
         
@@ -411,18 +439,42 @@ def load_service_data(deliveries_df_unified, orders_header_lookup_df, master_dat
         logs.append("ERROR: Service Loader cannot proceed: Deliveries, Orders Header, or Master Data is empty.")
         return logs, pd.DataFrame(), pd.DataFrame()
 
+    # Support both 'Goods Issue Date: Date' (prefer) and 'Delivery Creation Date: Date' (fallback)
+    # Keep both raw columns so we can compute separate KPIs (Planning OTIF vs Logistics OTIF).
+    # Define required and optional delivery columns
+    required_cols = [
+        "Deliveries Detail - Order Document Number",
+        "Item - SAP Model Code",
+        "Delivery Creation Date: Date",
+        "Deliveries - TOTAL Goods Issue Qty",
+        "Item - Model Desc"
+    ]
+
+    optional_cols = ["Goods Issue Date: Date"]
+
+    # Validate that required columns exist
+    if not check_columns(deliveries_df_unified, required_cols, "DELIVERIES.csv", logs):
+        return logs, pd.DataFrame(), pd.DataFrame()
+
+    # Build a mapping for any of the columns we actually have
     delivery_cols = {
         "Deliveries Detail - Order Document Number": "sales_order",
         "Item - SAP Model Code": "sku",
-        "Delivery Creation Date: Date": "ship_date",
+        "Delivery Creation Date: Date": "delivery_creation_date_raw",
         "Deliveries - TOTAL Goods Issue Qty": "units_issued",
         "Item - Model Desc": "product_name"
     }
+    # include optional goods issue column and optional time columns if present
+    if 'Goods Issue Date: Date' in deliveries_df_unified.columns:
+        delivery_cols['Goods Issue Date: Date'] = 'goods_issue_date_raw'
+    if 'Deliveries Dates - Goods Issue Time' in deliveries_df_unified.columns:
+        delivery_cols['Deliveries Dates - Goods Issue Time'] = 'goods_issue_time_raw'
+    if 'Deliveries Dates - Delivery Creation Time' in deliveries_df_unified.columns:
+        delivery_cols['Deliveries Dates - Delivery Creation Time'] = 'delivery_creation_time_raw'
 
-    if not check_columns(deliveries_df_unified, delivery_cols.keys(), "DELIVERIES.csv", logs):
-        return logs, pd.DataFrame(), pd.DataFrame()
-
-    df = deliveries_df_unified[list(delivery_cols.keys())].copy().rename(columns=delivery_cols)
+    # Only select the columns that actually exist in the loaded dataframe
+    select_cols = [c for c in delivery_cols.keys() if c in deliveries_df_unified.columns]
+    df = deliveries_df_unified[select_cols].copy().rename(columns=delivery_cols)
 
     # --- FIX: Clean SKU column to ensure consistent string type for joins ---
     df['sku'] = clean_string_column(df['sku'])
@@ -432,18 +484,90 @@ def load_service_data(deliveries_df_unified, orders_header_lookup_df, master_dat
     df['product_name'] = clean_string_column(df['product_name'])
 
     
+    # --- UPDATED: Parse any available date columns early so ship_date exists for aggregation ---
+    # Parse goods_issue_date_raw and delivery_creation_date_raw if present
+    # --- Parse date + optional time and localize to US/Eastern if present ---
+    # Use combined parsing when both date and time exist, otherwise fall back to date-only.
+    tz = 'US/Eastern'
+
+    # Helper function to parse combined date+time into tz-aware datetime
+    def parse_date_and_time(date_series, time_series=None):
+        # result series
+        res = pd.Series(index=date_series.index, dtype='datetime64[ns]')
+
+        if time_series is not None and time_series.name in df.columns:
+            # parse when both date and time available
+            mask = date_series.notna() & time_series.notna()
+            combined = date_series.loc[mask].astype(str).str.strip() + ' ' + time_series.loc[mask].astype(str).str.strip()
+            # Parse combined date+time into a naive datetime (local time). Avoid tz-localization here
+            # to keep arithmetic compatible with other naive date columns.
+            parsed = pd.to_datetime(combined, format='%m/%d/%y %H:%M:%S', errors='coerce')
+            res.loc[mask] = parsed
+
+        # Convert obvious sentinel markers into NaT BEFORE parsing
+        # Business rule: some sources use '1/1/2000' to mean "no date / placeholder" — treat as null
+        try:
+            # Treat string sentinel forms as nulls
+            str_series = date_series.astype(str).str.strip()
+            sentinel_mask = str_series.isin(['1/1/2000', '01/01/2000', '2000-01-01'])
+            # Also treat actual datetime values equal to 2000-01-01 as sentinel
+            if pd.api.types.is_datetime64_any_dtype(date_series) or pd.api.types.is_datetime64tz_dtype(date_series):
+                sentinel_mask = sentinel_mask | ((date_series.dt.year == 2000) & (date_series.dt.month == 1) & (date_series.dt.day == 1))
+            # Set sentinel entries to NaN so parse step will leave them as NaT
+            if sentinel_mask.any():
+                date_series = date_series.astype(object).where(~sentinel_mask, pd.NA)
+        except Exception:
+            # Be defensive - if anything goes wrong keep original series
+            pass
+
+        # fall back to date-only parsing for remaining rows
+        remaining = res.isna() & date_series.notna()
+        if remaining.any():
+            parsed_dates = pd.to_datetime(date_series.loc[remaining], format='%m/%d/%y', errors='coerce')
+            res.loc[remaining] = parsed_dates
+
+        # convert dtype to datetime64[ns]
+        if not pd.api.types.is_datetime64_any_dtype(res):
+            res = pd.to_datetime(res)
+        return res
+
+    df['goods_issue_date'] = parse_date_and_time(df.get('goods_issue_date_raw', pd.Series(pd.NaT)), df.get('goods_issue_time_raw'))
+    # Treat sentinel date 1/1/2000 as a null goods issue date (meaning goods issue hasn't occurred)
+    try:
+        sentinel = pd.Timestamp(year=2000, month=1, day=1)
+        # Mark rows that came from sentinel (preserve info) then null them out
+        df['goods_issue_was_sentinel'] = False
+        # If parsed equals sentinel OR raw text explicitly contains 2000 (e.g. '1/1/2000'), treat as sentinel
+        raw_series = df.get('goods_issue_date_raw', pd.Series(dtype=str))
+        # Regex: allow 1/1/2000, 01/01/2000, 1/1/00, 01/01/00
+        raw_sentinel_mask = raw_series.fillna('').astype(str).str.strip().str.match(r'^(0?1)/(0?1)/(2000|00)$')
+        parsed_sentinel_mask = df['goods_issue_date'].notna() & (df['goods_issue_date'].dt.normalize() == sentinel)
+        mask_sentinel = raw_sentinel_mask | parsed_sentinel_mask
+        if mask_sentinel.any():
+            df.loc[mask_sentinel, 'goods_issue_was_sentinel'] = True
+            df.loc[mask_sentinel, 'goods_issue_date'] = pd.NaT
+    except Exception:
+        # If anything goes wrong, don't break the loader
+        df['goods_issue_was_sentinel'] = False
+    df['delivery_creation_date'] = parse_date_and_time(df.get('delivery_creation_date_raw', pd.Series(pd.NaT)), df.get('delivery_creation_time_raw'))
+
+    # Determine primary ship_date (prefer goods_issue, otherwise delivery_creation)
+    df['ship_date'] = df['goods_issue_date'].fillna(df['delivery_creation_date'])
+
     # --- NEW LOGIC: Aggregate deliveries by order and item ---
     # This addresses user request #3 for a faster, order-item-centric view.
     logs.append("INFO: Aggregating multiple deliveries for the same order item.")
     df = df.groupby(['sales_order', 'sku'], as_index=False).agg(
         ship_date=('ship_date', 'max'), # Use the LATEST ship date for the service calc
-        units_issued=('units_issued', 'sum') # Use the SUM of all shipped units
+        units_issued=('units_issued', 'sum'), # Use the SUM of all shipped units
+        goods_issue_date=('goods_issue_date', 'max'),
+        delivery_creation_date=('delivery_creation_date', 'max')
     )
     logs.append(f"INFO: {len(df)} unique order-item shipments after aggregation.")
 
 
     # --- The rest of the logic proceeds with the aggregated data ---
-    df['ship_date_raw'] = df['ship_date']
+    # After aggregation we should already have parsed goods_issue_date and delivery_creation_date
     
     # --- UPDATED: Join on 'sales_order' ONLY ---
     # First, find the mismatches for the error report
@@ -460,14 +584,14 @@ def load_service_data(deliveries_df_unified, orders_header_lookup_df, master_dat
     logs.append(f"INFO: {len(df)} rows after joining Order Headers (inner join).")
     
     # --- FIX: Use the single, validated date format for performance and reliability ---
-    logs.append("INFO: Parsing Ship Dates with explicit format '%m/%d/%y'...")
-    df['ship_date'] = pd.to_datetime(df['ship_date_raw'], format='%m/%d/%y', errors='coerce')
+    # At this point goods_issue_date and delivery_creation_date were parsed prior to aggregation
+    # and preserved by taking the latest dates per order-item. ship_date already exists from aggregation.
 
     ship_date_fail_mask = df['ship_date'].isna()
     ship_date_nulls = ship_date_fail_mask.sum()
     if ship_date_nulls > 0:
         logs.append(f"ERROR: {ship_date_nulls} ship dates failed to parse (became NaT).")
-        logs.append("ADVICE: This is likely due to blank dates or mixed/bad text formats in the 'Delivery Creation Date: Date' column.")
+        logs.append("ADVICE: This is likely due to blank dates or mixed/bad text formats in the Goods Issue Date or Delivery Creation Date columns.")
         error_df = pd.concat([error_df, df[ship_date_fail_mask]]) 
     
     df.dropna(subset=['ship_date', 'order_date', 'units_issued'], inplace=True)
@@ -493,22 +617,73 @@ def load_service_data(deliveries_df_unified, orders_header_lookup_df, master_dat
     # product_name is now sourced from DELIVERIES, so it needs fillna
     for col in ['sales_org', 'customer_name', 'order_type', 'order_reason', 'product_name']:
         if col in df.columns:
-            df[col] = df[col].fillna('Unknown')
+            # If column is already categorical, ensure 'Unknown' is a valid category
+            if pd.api.types.is_categorical_dtype(df[col]):
+                df[col] = df[col].cat.add_categories(['Unknown']).fillna('Unknown')
+            else:
+                df[col] = df[col].fillna('Unknown')
     df['days_to_deliver'] = (df['ship_date'] - df['order_date']).dt.days
     df['days_to_deliver'] = df['days_to_deliver'].clip(lower=0)
     
-    # --- UPDATED BUSINESS LOGIC: Due date is 7 days after the order date. ---
+    # --- UPDATED BUSINESS LOGIC: Due date is 7 days after the order date (Planning OTIF). ---
     df['due_date'] = df['order_date'] + pd.to_timedelta(7, unit='D')
-    df['on_time'] = df['ship_date'] <= df['due_date']
+    # PLANNING OTIF: Shipment (goods_issue or ship_date fallback) within 7 days of order creation
+    df['planning_on_time'] = df['ship_date'] <= df['due_date']
+
+    # If goods_issue_date was the sentinel (means goods haven't been issued yet),
+    # treat the sentinel as missing and evaluate lateness using today's date as the decision point.
+    # If today is greater than due_date (order_date + 7 days) we mark planning as late (False)
+    if 'goods_issue_was_sentinel' in df.columns:
+        sentinel_planning_mask = df['goods_issue_was_sentinel'] & (df['due_date'] < TODAY)
+        if sentinel_planning_mask.any():
+            df.loc[sentinel_planning_mask, 'planning_on_time'] = False
+            df.loc[sentinel_planning_mask, 'planning_late_due_to_missing_goods_issue'] = True
+        else:
+            df['planning_late_due_to_missing_goods_issue'] = False
+
+    # LOGISTICS OTIF: Goods must be issued within 3 days of delivery creation
+    # (requires both dates - if missing, mark False). If goods_issue_date was the sentinel
+    # that means it's missing; in that case we treat it as not on time and consider it late
+    # if TODAY is greater than delivery_creation_date + 3 days.
+    df['delivery_plus_3'] = df['delivery_creation_date'] + pd.to_timedelta(3, unit='D')
+    df['logistics_on_time'] = False
+    valid_logistics_mask = df['goods_issue_date'].notna() & df['delivery_plus_3'].notna()
+    df.loc[valid_logistics_mask, 'logistics_on_time'] = (
+        df.loc[valid_logistics_mask, 'goods_issue_date'] <= df.loc[valid_logistics_mask, 'delivery_plus_3']
+    )
+    # For rows where goods_issue date was sentinel (missing), check if it's late vs delivery creation
+    if 'goods_issue_was_sentinel' in df.columns:
+        sentinel_logistics_mask = df['goods_issue_was_sentinel'] & df['delivery_plus_3'].notna()
+        if sentinel_logistics_mask.any():
+            # mark logistics as False (not on time) and separate flag for lateness
+            df.loc[sentinel_logistics_mask, 'logistics_on_time'] = False
+            df.loc[sentinel_logistics_mask, 'logistics_late_due_to_missing_goods_issue'] = (df.loc[sentinel_logistics_mask, 'delivery_plus_3'] < TODAY)
+        else:
+            df['logistics_late_due_to_missing_goods_issue'] = False
+
+    # Backwards compatibility: keep 'on_time' column representing Planning OTIF
+    df['on_time'] = df['planning_on_time']
     
     # --- UPDATED: Create BOTH Order and Ship date parts ---
     df['order_year'] = df['order_date'].dt.year
     df['order_month'] = df['order_date'].dt.month_name()
     df['order_month_num'] = df['order_date'].dt.month
+
+    # OPTIMIZATION: Convert categorical text columns to category dtype for memory savings
+    categorical_cols = ['sales_org', 'customer_name', 'order_type', 'order_reason', 'product_name', 'category', 'order_month']
+    for col in categorical_cols:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
     
     df['ship_year'] = df['ship_date'].dt.year
     df['ship_month'] = df['ship_date'].dt.month_name()
     df['ship_month_num'] = df['ship_date'].dt.month
+    
+    # OPTIMIZATION: Convert several text columns to categorical dtype to reduce memory
+    categorical_cols = ['sales_org', 'customer_name', 'order_type', 'order_reason', 'product_name', 'category', 'order_month', 'ship_month']
+    for col in categorical_cols:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
     
     if df.empty:
         logs.append("WARNING: Service Loader: No data remained after processing. Check date formats or join logic.")
@@ -586,7 +761,10 @@ def load_backorder_data(orders_item_lookup_df, orders_header_lookup_df, master_d
     # product_name is included here to fill if it was originally NaN from ORDERS.csv
     for col in ['sales_org', 'customer_name', 'order_type', 'order_reason', 'product_name']:
         if col in df.columns:
-            df[col] = df[col].fillna('Unknown')
+            if pd.api.types.is_categorical_dtype(df[col]):
+                df[col] = df[col].cat.add_categories(['Unknown']).fillna('Unknown')
+            else:
+                df[col] = df[col].fillna('Unknown')
     
     # --- BUSINESS LOGIC: Always use the order date as the starting point for backorder age. ---
     df['calc_date'] = df['order_date']
@@ -611,18 +789,22 @@ def load_inventory_data(inventory_path, file_key='inventory'):
     """
     Loads the inventory snapshot data from INVENTORY.csv, which contains
     on-hand stock quantities. It aggregates stock by SKU.
-    
+
+    IMPORTANT: Filters to the MOST RECENT snapshot only using the
+    'Snapshot YearWeek: Trade Marketing Yearmonth' column.
+    The 'Current Date' column is the data freshness date, NOT the snapshot date.
+
     Args:
         inventory_path: file path (used if no uploaded file exists)
         file_key: session state key for uploaded file (default 'inventory')
-    
+
     Returns: logs (list), dataframe, error_dataframe
     """
     logs = []
     start_time = time.time()
     logs.append("--- Inventory Snapshot Loader ---")
-    
-    # --- UPDATED: Load stock quantities, pricing columns, AND descriptive fields for exports ---
+
+    # --- UPDATED: Load stock quantities, pricing columns, snapshot dates, AND descriptive fields ---
     inventory_cols = {
         "Material Number": "sku",
         "POP Actual Stock Qty": "on_hand_qty",
@@ -632,9 +814,13 @@ def load_inventory_data(inventory_path, file_key='inventory'):
         "Storage Location: Code": "storage_location",
         "Material Description": "product_name",
         "Brand": "brand",
-        "POP Last Purchase: Date": "last_inbound_date"
+        "POP Last Purchase: Date": "last_inbound_date",
+        # Snapshot date fields - used to filter to most recent snapshot
+        "Snapshot YearWeek: Trade Marketing Year": "snapshot_year",
+        "Snapshot YearWeek: Trade Marketing Yearmonth": "snapshot_yearmonth",
+        "Snapshot YearWeek:Trade Marketing Week of the Year": "snapshot_week"
     }
-    
+
     try:
         # Load only the necessary columns for efficiency
         df = safe_read_csv(file_key, inventory_path, usecols=list(inventory_cols.keys()), low_memory=False)
@@ -645,9 +831,32 @@ def load_inventory_data(inventory_path, file_key='inventory'):
 
     if not check_columns(df, inventory_cols.keys(), "INVENTORY.csv", logs):
         return logs, pd.DataFrame(), pd.DataFrame()
-    
+
     df = df.rename(columns=inventory_cols)
     df['sku'] = clean_string_column(df['sku'])
+
+    # --- FILTER TO MOST RECENT SNAPSHOT ---
+    # The snapshot_yearmonth field (e.g., "2024-11") determines when the inventory was captured
+    # We only want the most recent snapshot to avoid double-counting inventory
+    if 'snapshot_yearmonth' in df.columns:
+        # Get unique snapshot periods and find the most recent
+        df['snapshot_yearmonth'] = df['snapshot_yearmonth'].astype(str).str.strip()
+        unique_snapshots = df['snapshot_yearmonth'].dropna().unique()
+        if len(unique_snapshots) > 0:
+            # Sort snapshots (they should be in YYYY-MM format or similar sortable format)
+            sorted_snapshots = sorted([s for s in unique_snapshots if s and s != 'nan'], reverse=True)
+            if sorted_snapshots:
+                most_recent_snapshot = sorted_snapshots[0]
+                rows_before = len(df)
+                df = df[df['snapshot_yearmonth'] == most_recent_snapshot]
+                logs.append(f"INFO: Filtered to most recent inventory snapshot: {most_recent_snapshot}")
+                logs.append(f"INFO: Retained {len(df)} rows from {rows_before} total (excluded {rows_before - len(df)} rows from older snapshots)")
+            else:
+                logs.append("WARN: No valid snapshot_yearmonth values found, using all data.")
+        else:
+            logs.append("WARN: snapshot_yearmonth column is empty, using all data.")
+    else:
+        logs.append("WARN: snapshot_yearmonth column not found, using all data.")
 
     # --- OPTIMIZATION: Use vectorized numeric conversion ---
     df['on_hand_qty'] = safe_numeric_column(df['on_hand_qty'], remove_commas=True)
@@ -719,10 +928,12 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
     # 1. Process deliveries for last 12 months to calculate demand
     try:
         # Use subset of columns from unified data
-        deliveries_df = deliveries_df_unified[["Item - SAP Model Code", "Delivery Creation Date: Date", "Deliveries - TOTAL Goods Issue Qty"]].copy()
+        # Prefer 'Goods Issue Date: Date' if present, otherwise fall back to 'Delivery Creation Date: Date'
+        date_col = 'Goods Issue Date: Date' if 'Goods Issue Date: Date' in deliveries_df_unified.columns else 'Delivery Creation Date: Date'
+        deliveries_df = deliveries_df_unified[["Item - SAP Model Code", date_col, "Deliveries - TOTAL Goods Issue Qty"]].copy()
         deliveries_df = deliveries_df.rename(columns={
             "Item - SAP Model Code": "sku",
-            "Delivery Creation Date: Date": "ship_date",
+            date_col: "ship_date",
             "Deliveries - TOTAL Goods Issue Qty": "units_issued"
         })
 
@@ -792,70 +1003,45 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
         # Keep only necessary columns for merging
         daily_demand = daily_demand[['sku', 'daily_demand']]
 
-        # --- NEW: Calculate Quarterly Demand (Rolling Q1-Q4) ---
-        logs.append("INFO: Calculating quarterly demand (rolling Q1-Q4)...")
+        # --- NEW: Calculate Monthly Demand (Last 12 months rolling) ---
+        logs.append("INFO: Calculating monthly demand (rolling last 12 months)...")
 
-        # Get the last complete quarter end date
-        current_quarter = (TODAY.month - 1) // 3 + 1
-        current_year = TODAY.year
+        # Anchor rolling 12 months to application TODAY (inclusive)
+        latest_month = TODAY.replace(day=1)  # month-start for current month
+        earliest_month = (latest_month - pd.DateOffset(months=11)).replace(day=1)
 
-        # Calculate Q4 end (most recent complete quarter)
-        if current_quarter == 1:
-            q4_end = pd.Timestamp(year=current_year-1, month=12, day=31)
-        elif current_quarter == 2:
-            q4_end = pd.Timestamp(year=current_year, month=3, day=31)
-        elif current_quarter == 3:
-            q4_end = pd.Timestamp(year=current_year, month=6, day=30)
-        else:  # current_quarter == 4
-            q4_end = pd.Timestamp(year=current_year, month=9, day=30)
+        logs.append(f"INFO: Monthly window: {earliest_month.date()} -> {TODAY.date()} (12 months)")
 
-        # Calculate quarter boundaries (rolling backwards from Q4)
-        q4_start = q4_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
-        q3_end = q4_start - pd.Timedelta(days=1)
-        q3_start = q3_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
-        q2_end = q3_start - pd.Timedelta(days=1)
-        q2_start = q2_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
-        q1_end = q2_start - pd.Timedelta(days=1)
-        q1_start = q1_end - pd.DateOffset(months=3) + pd.Timedelta(days=1)
+        # Create month period column for each delivery
+        monthly_data = deliveries_df[(deliveries_df['ship_date'] >= earliest_month) & (deliveries_df['ship_date'] <= TODAY)].copy()
+        monthly_data['month'] = monthly_data['ship_date'].dt.to_period('M').dt.to_timestamp()
 
-        # OPTIMIZED: Calculate demand for all quarters in single pass (3-4x faster)
-        # Use pd.cut() to assign quarters, then pivot - replaces 4 separate scans
-        quarter_bins = [q1_start - pd.Timedelta(days=1), q1_end, q2_end, q3_end, q4_end]
-        quarter_labels = ['q1_demand', 'q2_demand', 'q3_demand', 'q4_demand']
+        # Single groupby + pivot for last 12 months (sku x month)
+        monthly_pivot = monthly_data.groupby(['sku', 'month'], observed=True)['units_issued'].sum().reset_index()
+        monthly_pivot = monthly_pivot.pivot(index='sku', columns='month', values='units_issued').reset_index()
 
-        # Filter to quarter range once
-        quarterly_data = deliveries_df[(deliveries_df['ship_date'] >= q1_start) & (deliveries_df['ship_date'] <= q4_end)].copy()
+        # Ensure we have all 12 months in the pivot with consistent column names
+        # Note: earliest_month + DateOffset already returns a Timestamp, no need for .to_timestamp()
+        months = [(earliest_month + pd.DateOffset(months=i)) for i in range(12)]
+        month_cols = []
+        for m in months:
+            col_name = f"m_{m.year}_{m.month:02d}"
+            month_cols.append(col_name)
+            if m in monthly_pivot.columns:
+                # rename timestamp column to friendly column name
+                monthly_pivot = monthly_pivot.rename(columns={m: col_name})
+            elif col_name not in monthly_pivot.columns:
+                monthly_pivot[col_name] = 0
 
-        # Assign quarter label in single operation
-        quarterly_data['quarter'] = pd.cut(quarterly_data['ship_date'], bins=quarter_bins, labels=quarter_labels, include_lowest=True)
+        # Fill any remaining NaNs with 0
+        monthly_pivot = monthly_pivot.fillna(0)
 
-        # Single groupby + pivot to get all quarters at once
-        quarterly_pivot = quarterly_data.groupby(['sku', 'quarter'], observed=True)['units_issued'].sum().reset_index()
-        quarterly_pivot = quarterly_pivot.pivot(index='sku', columns='quarter', values='units_issued').reset_index()
-
-        # Fill missing quarters with 0
-        for q in quarter_labels:
-            if q not in quarterly_pivot.columns:
-                quarterly_pivot[q] = 0
-        quarterly_pivot = quarterly_pivot.fillna(0)
-
-        # Split into individual quarter dataframes for compatibility with existing merge logic
-        q1_demand = quarterly_pivot[['sku', 'q1_demand']]
-        q2_demand = quarterly_pivot[['sku', 'q2_demand']]
-        q3_demand = quarterly_pivot[['sku', 'q3_demand']]
-        q4_demand = quarterly_pivot[['sku', 'q4_demand']]
-
-        # Rolling 1-year usage (sum of Q1-Q4)
+        # Rolling 1-year usage (sum of last 12 months) - reuse total_demand which was computed using recent_deliveries
         rolling_1yr = total_demand.rename(columns={'total_units_issued': 'rolling_1yr_usage'})
 
-        logs.append(f"INFO: Q1 period: {q1_start.date()} to {q1_end.date()}")
-        logs.append(f"INFO: Q2 period: {q2_start.date()} to {q2_end.date()}")
-        logs.append(f"INFO: Q3 period: {q3_start.date()} to {q3_end.date()}")
-        logs.append(f"INFO: Q4 period: {q4_start.date()} to {q4_end.date()}")
-
-        # --- NEW: Calculate # of Quarters with History ---
-        # For each SKU, count how many quarters have had any demand since activation
-        logs.append("INFO: Calculating quarters with demand history since SKU activation...")
+        # --- NEW: Calculate # of Months with History ---
+        # For each SKU, count how many months have had any demand since activation
+        logs.append("INFO: Calculating months with demand history since SKU activation...")
 
         # Merge with activation dates
         deliveries_with_activation = pd.merge(deliveries_df, sku_activation[['sku', 'activation_date']], on='sku', how='left')
@@ -866,38 +1052,94 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
             (deliveries_with_activation['activation_date'].isna())
         ]
 
-        # Assign each delivery to a quarter
-        deliveries_with_activation['quarter_year'] = deliveries_with_activation['ship_date'].dt.to_period('Q')
+        # Assign each delivery to a month period
+        deliveries_with_activation['month_year'] = deliveries_with_activation['ship_date'].dt.to_period('M')
 
-        # Count unique quarters with demand per SKU
-        qtrs_with_history = deliveries_with_activation.groupby('sku')['quarter_year'].nunique().reset_index()
-        qtrs_with_history = qtrs_with_history.rename(columns={'quarter_year': 'qtrs_with_history'})
+        # Count unique months with demand per SKU
+        months_with_history = deliveries_with_activation.groupby('sku')['month_year'].nunique().reset_index()
+        months_with_history = months_with_history.rename(columns={'month_year': 'months_with_history'})
 
-        logs.append(f"INFO: Calculated quarters with history for {len(qtrs_with_history)} SKUs.")
+        logs.append(f"INFO: Calculated months with history for {len(months_with_history)} SKUs.")
 
     except Exception as e:
         logs.append(f"ERROR: Failed to process 'DELIVERIES.csv' for demand calculation: {e}")
         return logs, pd.DataFrame()
 
     # 2. Merge demand with inventory and calculate DIO
-    df = pd.merge(inventory_df, daily_demand, on='sku', how='left')
+    # If inventory_df contains time-series snapshot rows (has 'Current Date'),
+    # compute a monthly inventory pivot for the last 12 months and merge as inv_m_YYYY_MM columns.
+    inv_month_cols = []
+    try:
+        if 'Current Date' in inventory_df.columns:
+            logs.append("INFO: Inventory snapshots detected; building monthly inventory time-series columns (inv_m_YYYY_MM)...")
+            # Parse Current Date and ensure on_hand_qty column exists
+            inv_hist = inventory_df.copy()
+            inv_hist['current_date_parsed'] = pd.to_datetime(inv_hist['Current Date'], errors='coerce')
+            # Keep only rows with a date and non-null sku
+            inv_hist['sku'] = clean_string_column(inv_hist.get('sku', inv_hist.get('Material Number', pd.Series(dtype=str))))
+            inv_hist = inv_hist.dropna(subset=['sku', 'current_date_parsed'])
 
-    # Merge quarterly demand
-    df = pd.merge(df, q1_demand, on='sku', how='left')
-    df = pd.merge(df, q2_demand, on='sku', how='left')
-    df = pd.merge(df, q3_demand, on='sku', how='left')
-    df = pd.merge(df, q4_demand, on='sku', how='left')
+            # Create month period and pivot last 12 months
+            latest_month = TODAY.replace(day=1)
+            earliest_month = (latest_month - pd.DateOffset(months=11)).replace(day=1)
+            inv_hist_recent = inv_hist[(inv_hist['current_date_parsed'] >= earliest_month) & (inv_hist['current_date_parsed'] <= TODAY)].copy()
+            if not inv_hist_recent.empty and 'on_hand_qty' in inv_hist_recent.columns:
+                inv_hist_recent['month'] = inv_hist_recent['current_date_parsed'].dt.to_period('M').dt.to_timestamp()
+                inv_pivot = inv_hist_recent.groupby(['sku', 'month'], observed=True)['on_hand_qty'].sum().reset_index()
+                inv_pivot = inv_pivot.pivot(index='sku', columns='month', values='on_hand_qty').reset_index()
+
+                # Generate month timestamps for the last 12 months
+                # earliest_month is already a Timestamp, so we just add DateOffset (no need for .to_timestamp())
+                months = [(earliest_month + pd.DateOffset(months=i)) for i in range(12)]
+                for m in months:
+                    col_name = f"inv_m_{m.year}_{m.month:02d}"
+                    inv_month_cols.append(col_name)
+                    if m in inv_pivot.columns:
+                        inv_pivot = inv_pivot.rename(columns={m: col_name})
+                    elif col_name not in inv_pivot.columns:
+                        inv_pivot[col_name] = 0
+
+                inv_pivot = inv_pivot.fillna(0)
+
+                # Merge inventory monthly pivot into a current-inventory summary below
+            else:
+                logs.append("INFO: No recent inventory snapshot rows were found for monthly inventory pivot.")
+                inv_pivot = pd.DataFrame()
+        else:
+            inv_pivot = pd.DataFrame()
+    except Exception as e:
+        logs.append(f"WARN: Failed to build inventory monthly pivot from snapshots: {e}")
+        inv_pivot = pd.DataFrame()
+
+    # Use aggregated / latest snapshot per SKU for main inventory metrics
+    # If the passed inventory_df appears to be time-series (multiple snapshots), pick the latest snapshot per sku
+    if 'Current Date' in inventory_df.columns:
+        inv_for_merge = inventory_df.copy()
+        inv_for_merge['current_date_parsed'] = pd.to_datetime(inv_for_merge['Current Date'], errors='coerce')
+        inv_for_merge['sku'] = clean_string_column(inv_for_merge.get('sku', inv_for_merge.get('Material Number', pd.Series(dtype=str))))
+        # choose latest snapshot per sku
+        inv_for_merge = inv_for_merge.sort_values(['sku', 'current_date_parsed']).groupby('sku', as_index=False).last()
+    else:
+        inv_for_merge = inventory_df.copy()
+
+    df = pd.merge(inv_for_merge, daily_demand, on='sku', how='left')
+
+    # Merge monthly demand pivot (last 12 months)
+    df = pd.merge(df, monthly_pivot, on='sku', how='left')
+    # Merge inventory monthly pivot (if built)
+    if not inv_pivot.empty:
+        df = pd.merge(df, inv_pivot, on='sku', how='left')
     df = pd.merge(df, rolling_1yr, on='sku', how='left')
-    df = pd.merge(df, qtrs_with_history, on='sku', how='left')
+    df = pd.merge(df, months_with_history, on='sku', how='left')
 
     # Fill NaN values with 0 for all demand columns
     df['daily_demand'] = df['daily_demand'].fillna(0)
-    df['q1_demand'] = df['q1_demand'].fillna(0)
-    df['q2_demand'] = df['q2_demand'].fillna(0)
-    df['q3_demand'] = df['q3_demand'].fillna(0)
-    df['q4_demand'] = df['q4_demand'].fillna(0)
+    # Fill monthly columns with 0 if missing
+    for _mc in month_cols:
+        if _mc in df.columns:
+            df[_mc] = df[_mc].fillna(0)
     df['rolling_1yr_usage'] = df['rolling_1yr_usage'].fillna(0)
-    df['qtrs_with_history'] = df['qtrs_with_history'].fillna(0).astype(int)
+    df['months_with_history'] = df['months_with_history'].fillna(0).astype(int)
     
     # --- FIX: Add logging when daily_demand is zero (but keep logic unchanged) ---
     # Treat 0 daily demand as 0 DIO (inventory not moving = infinite days of inventory is not reported)
@@ -912,6 +1154,12 @@ def load_inventory_analysis_data(inventory_df, deliveries_df_unified, master_dat
     # 3. Enrich with master data
     df = pd.merge(df, master_data_df, on='sku', how='left')
     df['category'] = df['category'].fillna('Unknown')
+    
+    # OPTIMIZATION #3: Convert categorical columns to category dtype for memory savings (50-90% reduction)
+    categorical_cols = ['category', 'storage_location', 'product_name', 'brand', 'currency', 'plm_status']
+    for col in categorical_cols:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
     
     logs.append(f"INFO: Inventory Analysis finished in {time.time() - start_time:.2f} seconds.")
     return logs, df
@@ -1035,7 +1283,7 @@ def get_forecast_horizon(sku: str, lead_time_lookup: dict, default_horizon: int 
 
 # ===== VENDOR & PROCUREMENT DATA LOADERS =====
 
-@st.cache_data(show_spinner="Loading vendor purchase orders...")
+@st.cache_data(ttl=3600, show_spinner="Loading vendor purchase orders...")
 def load_vendor_pos(po_path, file_key='vendor_pos'):
     """
     Load vendor purchase order data from Domestic Vendor POs.csv
@@ -1128,6 +1376,12 @@ def load_vendor_pos(po_path, file_key='vendor_pos'):
         axis=1
     )
 
+    # OPTIMIZATION: Convert repeat text columns to category dtype for memory savings
+    categorical_cols = ['vendor_name', 'vendor_country', 'vendor_city', 'po_status', 'payment_terms', 'product_description']
+    for col in categorical_cols:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
+
     end_time = time.time()
     total_time = end_time - start_time
     logs.append(f"INFO: Vendor PO Loader finished in {total_time:.2f} seconds.")
@@ -1137,7 +1391,7 @@ def load_vendor_pos(po_path, file_key='vendor_pos'):
     return logs, df
 
 
-@st.cache_data(show_spinner="Loading inbound receipts...")
+@st.cache_data(ttl=3600, show_spinner="Loading inbound receipts...")
 def load_inbound_data(inbound_path, file_key='inbound'):
     """
     Load inbound receipt data from DOMESTIC INBOUND.csv
@@ -1193,6 +1447,12 @@ def load_inbound_data(inbound_path, file_key='inbound'):
     today = pd.Timestamp.now()
     df['receipt_age_days'] = (today - df['receipt_date']).dt.days
 
+    # OPTIMIZATION: Convert repeat text columns to category dtype for memory savings
+    categorical_cols = ['category', 'product_description']
+    for col in categorical_cols:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
+
     end_time = time.time()
     total_time = end_time - start_time
     logs.append(f"INFO: Inbound Receipts Loader finished in {total_time:.2f} seconds.")
@@ -1247,7 +1507,7 @@ def load_vendor_performance(po_df, inbound_df):
         merged['on_time_delivery'] = None
 
     # Group by vendor to calculate performance metrics
-    vendor_perf = merged.groupby('vendor_name').agg({
+    vendor_perf = merged.groupby('vendor_name', observed=True).agg({
         'po_number': 'nunique',                          # Number of POs
         'ordered_qty': 'sum',                            # Total ordered quantity
         'received_qty': 'sum',                           # Total received quantity
