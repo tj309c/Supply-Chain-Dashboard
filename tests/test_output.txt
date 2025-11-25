@@ -314,13 +314,13 @@ WAREHOUSE SCRAP LIST EXPORT DIAGNOSTIC TEST
   - SKUs > 2 years old: 1457
   - SKUs > 3 years old: 1197
 
-[STEP 4] Checking quarterly demand columns...
-✓ Found quarterly columns: ['q1_demand', 'q2_demand', 'q3_demand', 'q4_demand']
+[STEP 4] Checking monthly demand columns (last 12 months)...
+✓ Found monthly columns: ['m_YYYY_MM', 'm_YYYY_MM', 'm_YYYY_MM', '...']
 
 [STEP 5] Testing prepare_warehouse_scrap_list() function...
 ✓ Function executed successfully
   - Result shape: (1976, 28)
-  - Result columns: ['Material', 'Alternate Codes', 'Storage Location', 'Description', 'SKU Creation Date', 'Flag Status (PLM Current Status)', 'Last Inbound Date', 'PLM Expiration Date', 'Brand', 'Category', 'STD Price', 'Total STD Price', 'Free Qt', 'Q1 Demand', 'Q2 Demand', 'Q3 Demand', 'Q4 Demand', 'Rolling 1 Yr Usage', '# of Qtrs with History', 'Months of Supply', 'Qty over 2 Yrs Supply', 'USD value over 2 Yrs Supply', 'Conservative Scrap Qty', 'Conservative Scrap Value (USD)', 'Medium Scrap Qty', 'Medium Scrap Value (USD)', 'Aggressive Scrap Qty', 'Aggressive Scrap Value (USD)']
+  - Result columns: ['Material', 'Alternate Codes', 'Storage Location', 'Description', 'SKU Creation Date', 'Flag Status (PLM Current Status)', 'Last Inbound Date', 'PLM Expiration Date', 'Brand', 'Category', 'STD Price', 'Total STD Price', 'Free Qt', '... (last 12 monthly demand cols) ...', 'Rolling 1 Yr Usage', '# of Months with History', 'Months of Supply', 'Qty over 2 Yrs Supply', 'USD value over 2 Yrs Supply', 'Conservative Scrap Qty', 'Conservative Scrap Value (USD)', 'Medium Scrap Qty', 'Medium Scrap Value (USD)', 'Aggressive Scrap Qty', 'Aggressive Scrap Value (USD)']
 ✓ Scrap list generated with 1976 rows
   ✓ All 6 scrap recommendation columns present
     - Conservative Scrap Qty: 699 non-zero values
@@ -342,12 +342,9 @@ Column summary:
   STD Price: min=0.0, max=8150.0, mean=96.52
   Total STD Price: min=0.0, max=270002.26, mean=4743.40
   Free Qt: min=1, max=418144, mean=485.79
-  Q1 Demand: min=0.0, max=159000.0, mean=175.56
-  Q2 Demand: min=0.0, max=57800.0, mean=85.77
-  Q3 Demand: min=0.0, max=152000.0, mean=185.37
-  Q4 Demand: min=0.0, max=79600.0, mean=135.08
+  Monthly Demand (sample): min=0.0, max=159000.0, mean=<varies per-month>
   Rolling 1 Yr Usage: min=0.0, max=342400.0, mean=507.01
-  # of Qtrs with History: min=0, max=12, mean=4.39
+  # of Months with History: min=0, max=12, mean=4.39
   Months of Supply: min=0.0, max=6180.666666666667, mean=62.53
   Qty over 2 Yrs Supply: min=0.0, max=65486.0, mean=119.15
   USD value over 2 Yrs Supply: min=0.0, max=155636.36363636362, mean=1707.65

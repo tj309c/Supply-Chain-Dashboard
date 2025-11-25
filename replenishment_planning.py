@@ -361,10 +361,19 @@ def generate_replenishment_plan(
     inv_df = inventory_df.copy() if not inventory_df.empty else pd.DataFrame()
     if not inv_df.empty and 'sku' in inv_df.columns:
         inv_df['sku'] = normalize_sku_series(inv_df['sku'])
-        inv_df = inv_df.groupby('sku').agg({
-            'on_hand_qty': 'sum',
-            'in_transit_qty': 'sum' if 'in_transit_qty' in inv_df.columns else lambda x: 0
-        }).reset_index()
+        # Build aggregation dict dynamically based on available columns
+        agg_dict = {'on_hand_qty': 'sum'}
+        if 'in_transit_qty' in inv_df.columns:
+            agg_dict['in_transit_qty'] = 'sum'
+        if 'last_purchase_price' in inv_df.columns:
+            agg_dict['last_purchase_price'] = 'first'  # Take first price per SKU
+        inv_df = inv_df.groupby('sku').agg(agg_dict).reset_index()
+        # Ensure in_transit_qty column exists
+        if 'in_transit_qty' not in inv_df.columns:
+            inv_df['in_transit_qty'] = 0
+        # Ensure last_purchase_price column exists
+        if 'last_purchase_price' not in inv_df.columns:
+            inv_df['last_purchase_price'] = 0
 
     # ===== STEP 4: Get backorder data =====
     logs.append("INFO: Processing backorder data...")
@@ -469,39 +478,124 @@ def generate_replenishment_plan(
     # ===== STEP 7: Build replenishment plan =====
     logs.append("INFO: Building replenishment plan...")
 
+    # PERFORMANCE: Pre-build lookup dictionaries to avoid DataFrame filtering in loop
+    # This is 10-50x faster than filtering DataFrames for each SKU
+
+    # Inventory lookup: sku -> (on_hand, in_transit, unit_cost)
+    inv_lookup = {}
+    if not inv_df.empty:
+        in_transit_col = 'in_transit_qty' if 'in_transit_qty' in inv_df.columns else None
+        cost_col = 'last_purchase_price' if 'last_purchase_price' in inv_df.columns else None
+        for _, r in inv_df.iterrows():
+            inv_lookup[r['sku']] = (
+                r.get('on_hand_qty', 0),
+                r.get(in_transit_col, 0) if in_transit_col else 0,
+                r.get(cost_col, 0) if cost_col else 0
+            )
+
+    # Backorder lookup: sku -> backorder_qty
+    bo_lookup = {}
+    if not backorder_summary.empty:
+        bo_lookup = dict(zip(backorder_summary['sku'], backorder_summary['backorder_qty']))
+
+    # Open PO lookup: sku -> open_qty
+    po_lookup = {}
+    if not open_po_summary.empty:
+        po_lookup = dict(zip(open_po_summary['sku'], open_po_summary['open_qty']))
+
+    # Build vendor/product lookup from ORIGINAL inventory_df (before aggregation)
+    # This has the vendor and product_name columns
+    vendor_product_lookup = {}
+    if not inventory_df.empty:
+        inv_orig = inventory_df.copy()
+        # Find vendor column
+        vendor_col = None
+        for col in ['POP Last Purchase: Vendor Name', 'vendor', 'Vendor', 'Supplier', 'vendor_name']:
+            if col in inv_orig.columns:
+                vendor_col = col
+                break
+        # Find product name column
+        name_col = None
+        for col in ['product_name', 'Product Name', 'Material Description', 'description']:
+            if col in inv_orig.columns:
+                name_col = col
+                break
+        # Find SKU column
+        sku_col = None
+        for col in ['sku', 'SKU', 'Material Number']:
+            if col in inv_orig.columns:
+                sku_col = col
+                break
+
+        if sku_col:
+            inv_orig['_norm_sku'] = normalize_sku_series(inv_orig[sku_col])
+            for _, r in inv_orig.drop_duplicates('_norm_sku').iterrows():
+                norm_sku = r['_norm_sku']
+                vendor = r.get(vendor_col, 'Unknown') if vendor_col else 'Unknown'
+                product = r.get(name_col, '') if name_col else ''
+                # Clean up vendor - replace NaN with Unknown
+                if pd.isna(vendor) or str(vendor).strip() == '':
+                    vendor = 'Unknown'
+                vendor_product_lookup[norm_sku] = (vendor, product)
+
+    # Master data lookup as fallback: sku -> (vendor, product_name)
+    master_lookup = {}
+    if not master_df.empty:
+        sku_col = None
+        vendor_col = None
+        name_col = None
+        for col in ['sku', 'SKU', 'Material Number', 'SAP Material Code']:
+            if col in master_df.columns:
+                sku_col = col
+                break
+        for col in ['POP Last Purchase: Vendor Name', 'vendor', 'Vendor', 'Supplier', 'vendor_name']:
+            if col in master_df.columns:
+                vendor_col = col
+                break
+        for col in ['product_name', 'Product Name', 'Material Description', 'description']:
+            if col in master_df.columns:
+                name_col = col
+                break
+
+        if sku_col:
+            # Normalize master SKUs once
+            master_df_temp = master_df.copy()
+            master_df_temp['_norm_sku'] = normalize_sku_series(master_df_temp[sku_col])
+            for _, r in master_df_temp.iterrows():
+                norm_sku = r['_norm_sku']
+                master_lookup[norm_sku] = (
+                    r.get(vendor_col, 'Unknown') if vendor_col else 'Unknown',
+                    r.get(name_col, '') if name_col else ''
+                )
+
     plan_list = []
     z_score = SERVICE_LEVEL_Z_SCORES.get(service_level, SERVICE_LEVEL_Z_SCORES[95])
+    service_level_int = int(service_level * 100) if service_level < 1 else int(service_level)
+    lead_time = default_lead_time_days
 
-    for _, row in demand_df.iterrows():
-        sku = row['sku']
+    # Use itertuples for faster iteration (3-5x faster than iterrows)
+    for row in demand_df.itertuples(index=False):
+        sku = row.sku
 
-        # Get demand data
-        daily_demand = row.get('primary_forecast_daily', row.get('avg_daily_demand', 0))
-        demand_std = row.get('demand_std', 0)
+        # Get demand data from named tuple
+        daily_demand = getattr(row, 'primary_forecast_daily', None) or getattr(row, 'avg_daily_demand', 0) or 0
+        demand_std = getattr(row, 'demand_std', 0) or 0
 
         # Convert monthly std to daily if needed (for monthly data)
         if demand_std > daily_demand * 10:  # Likely monthly std
             demand_std = demand_std / 30.0
 
-        # Get inventory
-        inv_row = inv_df[inv_df['sku'] == sku] if not inv_df.empty else pd.DataFrame()
-        on_hand = inv_row['on_hand_qty'].iloc[0] if not inv_row.empty else 0
-        in_transit = inv_row.get('in_transit_qty', pd.Series([0])).iloc[0] if not inv_row.empty else 0
+        # Get inventory from lookup (O(1) instead of O(n))
+        inv_data = inv_lookup.get(sku, (0, 0, 0))
+        on_hand, in_transit, unit_cost = inv_data
 
-        # Get backorders
-        bo_row = backorder_summary[backorder_summary['sku'] == sku] if not backorder_summary.empty else pd.DataFrame()
-        backorder_qty = bo_row['backorder_qty'].iloc[0] if not bo_row.empty else 0
+        # Get backorders from lookup
+        backorder_qty = bo_lookup.get(sku, 0)
 
-        # Get open POs
-        po_row = open_po_summary[open_po_summary['sku'] == sku] if not open_po_summary.empty else pd.DataFrame()
-        open_po_qty = po_row['open_qty'].iloc[0] if not po_row.empty else 0
-
-        # Use default lead time (future: calculate from history)
-        lead_time = default_lead_time_days
+        # Get open POs from lookup
+        open_po_qty = po_lookup.get(sku, 0)
 
         # Calculate safety stock
-        # Convert service_level to integer percentage if passed as decimal
-        service_level_int = int(service_level * 100) if service_level < 1 else int(service_level)
         safety_stock = calculate_safety_stock(
             daily_demand, demand_std, lead_time, service_level_int
         )
@@ -534,45 +628,21 @@ def generate_replenishment_plan(
         # Calculate priority score
         priority = calculate_priority_score(days_of_supply, backorder_qty, daily_demand)
 
-        # Get vendor from master data
-        vendor = 'Unknown'
-        if not master_df.empty:
-            sku_col = None
-            vendor_col = None
-            for col in ['sku', 'SKU', 'Material Number', 'SAP Material Code']:
-                if col in master_df.columns:
-                    sku_col = col
-                    break
-            # Look for vendor columns - include actual column names from master data
-            for col in ['POP Last Purchase: Vendor Name', 'vendor', 'Vendor', 'Supplier', 'vendor_name']:
-                if col in master_df.columns:
-                    vendor_col = col
-                    break
+        # Get vendor and product name - prefer inventory lookup, fallback to master
+        vendor, product_name = vendor_product_lookup.get(sku, ('Unknown', ''))
 
-            if sku_col and vendor_col:
-                master_row = master_df[normalize_sku_series(master_df[sku_col]) == sku]
-                if not master_row.empty:
-                    vendor = master_row[vendor_col].iloc[0]
+        # Fallback to master data if vendor still Unknown
+        if vendor == 'Unknown':
+            master_data = master_lookup.get(sku, ('Unknown', ''))
+            if master_data[0] != 'Unknown':
+                vendor = master_data[0]
+            if not product_name and master_data[1]:
+                product_name = master_data[1]
 
-        # Get product name
-        product_name = row.get('product_name', '')
-        if not product_name and not master_df.empty:
-            name_col = None
-            for col in ['product_name', 'Product Name', 'Material Description', 'description']:
-                if col in master_df.columns:
-                    name_col = col
-                    break
-            if name_col and sku_col:
-                master_row = master_df[normalize_sku_series(master_df[sku_col]) == sku]
-                if not master_row.empty:
-                    product_name = master_row[name_col].iloc[0]
-
-        # Get unit cost for order value calculation
-        unit_cost = 0
-        if not inv_df.empty and 'last_purchase_price' in inv_df.columns:
-            cost_row = inv_df[inv_df['sku'] == sku]
-            if not cost_row.empty:
-                unit_cost = cost_row['last_purchase_price'].iloc[0]
+        # Use product_name from demand row if available
+        row_product_name = getattr(row, 'product_name', None)
+        if row_product_name:
+            product_name = row_product_name
 
         plan_list.append({
             'sku': sku,

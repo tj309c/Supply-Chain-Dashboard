@@ -10,12 +10,20 @@ Auto-generated documentation of all business rules and field definitions.
 
 ### INVENTORY.csv
 
-**Description:** Current inventory snapshot with on-hand quantities and pricing
+**Description:** Inventory snapshots with on-hand quantities and pricing. Contains both current and historical inventory data.
+
+**Important Date Field Clarification:**
+- `Current Date`: This is the **data freshness date** (when the file was extracted/refreshed), NOT the snapshot date
+- The **actual inventory snapshot date** is determined by the `Snapshot YearWeek` fields below
 
 | Field Name | Data Type | Required | Description | Used For |
 |------------|-----------|----------|-------------|----------|
 | Material Number | string | True | Unique SKU/Material identifier (SAP Material Code) | inventory_tracking, master_data_join |
 | POP Actual Stock Qty | numeric | True | Current on-hand quantity in stock | inventory_value, dio_calculation, stock_out_risk |
+| Current Date | date | False | **Data freshness date** - when this data was extracted/refreshed (format: MM/DD/YY). NOT the inventory snapshot date. | data_freshness_indicator |
+| Snapshot YearWeek: Trade Marketing Year | string | True | **Snapshot year** - the trade marketing year when this inventory snapshot was taken | inventory_time_series, historical_analysis |
+| Snapshot YearWeek: Trade Marketing Yearmonth | string | True | **Snapshot month** - the trade marketing year-month when this inventory snapshot was taken (e.g., "2024-11") | inventory_time_series, monthly_trends |
+| Snapshot YearWeek:Trade Marketing Week of the Year | numeric | True | **Snapshot week** - the trade marketing week of year when this inventory snapshot was taken (1-52) | inventory_time_series, weekly_analysis |
 | POP Actual Stock in Transit Qty | numeric | False | Quantity in transit (not yet received) | available_inventory, planning |
 | POP Last Purchase: Price in Purch. Currency | numeric | True | Last purchase price per unit (used for inventory valuation) | inventory_value, scrap_value_calculation |
 | POP Last Purchase: Currency | string | True | Currency of last purchase price (USD, EUR, etc.) | currency_conversion, inventory_value |
@@ -29,6 +37,7 @@ Auto-generated documentation of all business rules and field definitions.
 | Deliveries Detail - Order Document Number | string | True | Order number (links to ORDERS.csv) | order_join, service_level |
 | Item - SAP Model Code | string | True | SKU/Material code for delivered item | demand_calculation, dio_calculation |
 | Delivery Creation Date: Date | date | True | Date when shipment was created/shipped (format: MM/DD/YY) | service_level, demand_calculation, historical_trends |
+| Goods Issue Date: Date | date | False | Date when goods were issued from the warehouse (format: MM/DD/YY). Preferred for Logistics OTIF. | service_level, logistics_metrics |
 | Deliveries - TOTAL Goods Issue Qty | numeric | True | Quantity of units shipped/delivered | demand_calculation, service_level |
 | Item - Model Desc | string | False | Product/item description | display, reporting |
 
@@ -140,13 +149,19 @@ Auto-generated documentation of all business rules and field definitions.
 
 **Notes:** Used for service level performance tracking
 
-### On-Time Delivery Flag
+### On-Time Delivery Flags
 
-**Formula:** `ship_date <= (order_date + 7 days)`
+We now calculate two separate OTIF (On-Time In-Full / On-Time) measures to capture different parts of the fulfillment chain:
 
-**Description:** Boolean flag indicating if delivery was on-time
+- **Planning OTIF (Order → Shipment)**
+	- Formula: `ship_date <= (order_date + 7 days)`
+	- Description: Whether the shipment occurred within 7 days of order creation. Ship date is defined as the Goods Issue Date when available, otherwise the Delivery Creation Date.
+	- Used for: service level reporting, planning SLAs, customer-facing KPIs
 
-**Notes:** Used to calculate on-time delivery percentage
+- **Logistics OTIF (Delivery Creation → Goods Issue)**
+	- Formula: `goods_issue_date <= (delivery_creation_date + 3 days)`
+	- Description: Measures the logistics team's ability to issue goods within 3 days of delivery creation. Only counted where both dates are present.
+	- Used for: logistics performance, root-cause, vendor/3PL evaluation
 
 ---
 
@@ -161,7 +176,7 @@ Auto-generated documentation of all business rules and field definitions.
 ### Service Level Rules
 
 ```python
-{'on_time_delivery': {'standard_lead_time_days': 7, 'target_on_time_percentage': 95.0}, 'performance_thresholds': {'excellent': 95.0, 'good': 90.0, 'fair': 85.0}}
+{'on_time_delivery': {'standard_lead_time_days': 7, 'target_on_time_percentage': 95.0}, 'performance_thresholds': {'excellent': 95.0, 'good': 90.0, 'fair': 85.0}, 'logistics_on_time_days': 3}
 ```
 
 ### Backorder Rules
@@ -234,4 +249,72 @@ Auto-generated documentation of all business rules and field definitions.
 - **Backorder Alerts**: Flags backorders on old codes when inventory exists on current code
 - **Code Migration**: Recommends updating orders from old codes to current codes
 - **Reporting**: All reports consolidate data under current/active material codes
+
+---
+
+## Demand Forecasting Business Logic
+
+### Overview
+
+The demand forecasting module generates statistical forecasts based on historical delivery data. It supports both daily and monthly time-series granularity.
+
+### Key Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Rolling Window | 30 months | Historical data window for monthly forecasting (overrides sidebar filter) |
+| Forecast Horizon | 90 days | How far into the future to project demand |
+| Min Data Requirement | 3 months (monthly) / 30 days (daily) | Minimum historical data needed per SKU |
+| Backtest Split | 80/20 | Train/test split for accuracy calculation |
+
+### Forecast Methods
+
+The system automatically selects the best forecasting method based on data availability:
+
+| Method | Window | Used When |
+|--------|--------|-----------|
+| MA-3M | 3 months | Less than 6 months of history (monthly granularity) |
+| MA-6M | 6 months | 6-11 months of history (monthly granularity) |
+| MA-12M | 12 months | 12+ months of history (monthly granularity) |
+| MA-30 | 30 days | Less than 60 days of history (daily granularity) |
+| MA-60 | 60 days | 60-89 days of history (daily granularity) |
+| MA-90 | 90 days | 90+ days of history (daily granularity) |
+
+### Confidence Scoring
+
+Forecasts are assigned confidence levels based on:
+
+- **Historical data availability**: More data = higher confidence
+- **Demand variability (CV)**: Lower CV = more predictable = higher confidence
+- **Backtest accuracy (MAPE)**: Lower MAPE = more accurate = higher confidence
+
+| Confidence | Score Range | Interpretation |
+|------------|-------------|----------------|
+| High | 80-100 | Reliable forecast, stable demand pattern |
+| Medium | 60-79 | Reasonable forecast, some variability |
+| Low | 40-59 | Forecast less certain, review needed |
+| Very Low | 0-39 | Unreliable forecast, insufficient data |
+
+### Monthly vs Daily Granularity
+
+When `Rolling 12 Months (monthly)` is selected in the sidebar, the demand page **automatically overrides to 30 months** for better forecasting. The UI displays:
+
+- **Monthly bars** for historical actuals
+- **Monthly forecast bars** for projections (next 3 months)
+- **Confidence intervals** as error bars
+
+### Important Notes for Developers
+
+1. **Data Filtering**: The RETAIL PERMANENT filter is applied BEFORE demand forecasting, so only retail SKUs are included in forecasts.
+
+2. **SKU Code Normalization**: SKU codes are normalized (uppercase, single spaces) for matching across data sources.
+
+3. **Date Format**: Deliveries use `MM/DD/YY` date format for `Goods Issue Date: Date`.
+
+4. **Empty Forecasts**: If the forecast dataframe is empty, check:
+   - Sufficient historical data (minimum 3 months for monthly mode)
+   - RETAIL PERMANENT filter matches SKUs in deliveries
+   - Date parsing succeeded (no NaT values)
+
+5. **Performance**: Forecasting 500+ SKUs takes ~1-2 seconds with caching. Use the sidebar "Precompute Forecasts" button to warm the cache.
 

@@ -1346,58 +1346,149 @@ def render_abc_analysis_chart(inventory_data, currency="USD"):
 
     return fig
 
-def render_category_heatmap(inventory_data, currency="USD"):
-    """Render category benchmarking heat map"""
-    if inventory_data.empty or 'category' not in inventory_data.columns:
+def render_brand_heatmap(inventory_data, currency="USD"):
+    """Render brand benchmarking heat map showing DIO by brand"""
+    if inventory_data.empty:
+        return None
+
+    # Determine value column - calculate if stock_value doesn't exist
+    value_col = f'stock_value_{currency.lower()}'
+    has_value_col = value_col in inventory_data.columns
+
+    if not has_value_col:
+        # Calculate stock value from price * qty if possible
+        if 'last_purchase_price' in inventory_data.columns and 'on_hand_qty' in inventory_data.columns:
+            inventory_data = inventory_data.copy()
+            inventory_data['_calc_value'] = inventory_data['last_purchase_price'].fillna(0) * inventory_data['on_hand_qty'].fillna(0)
+            value_col = '_calc_value'
+            has_value_col = True
+
+    # Determine grouping column - prefer brand, fallback to category
+    group_col = None
+    group_label = None
+    if 'brand' in inventory_data.columns and inventory_data['brand'].notna().sum() > 1:
+        group_col = 'brand'
+        group_label = 'Brand'
+    elif 'category' in inventory_data.columns and inventory_data['category'].notna().sum() > 1:
+        group_col = 'category'
+        group_label = 'Category'
+    else:
+        # No useful grouping available - show top SKUs instead
+        return render_top_skus_dio_chart(inventory_data, currency)
+
+    # Filter out null/empty values
+    filtered_data = inventory_data[inventory_data[group_col].notna() & (inventory_data[group_col] != '')]
+
+    if filtered_data.empty or filtered_data[group_col].nunique() < 2:
+        # Not enough groups for meaningful comparison - show top SKUs instead
+        return render_top_skus_dio_chart(inventory_data, currency)
+
+    # Build aggregation dict based on available columns
+    agg_dict = {'dio': 'mean', 'sku': 'count'}
+    if has_value_col and value_col in filtered_data.columns:
+        agg_dict[value_col] = 'sum'
+    if 'on_hand_qty' in filtered_data.columns:
+        agg_dict['on_hand_qty'] = 'sum'
+
+    # Calculate metrics by group
+    group_summary = filtered_data.groupby(group_col).agg(agg_dict).reset_index()
+
+    # Rename columns dynamically
+    rename_map = {'dio': 'avg_dio', 'sku': 'sku_count', 'on_hand_qty': 'total_units'}
+    if has_value_col:
+        rename_map[value_col] = 'total_value'
+    group_summary = group_summary.rename(columns=rename_map)
+
+    # Ensure total_value exists for sorting (use total_units or sku_count as fallback)
+    if 'total_value' not in group_summary.columns:
+        group_summary['total_value'] = group_summary.get('total_units', group_summary['sku_count'])
+
+    # Ensure total_units exists
+    if 'total_units' not in group_summary.columns:
+        group_summary['total_units'] = group_summary['sku_count']
+
+    # Sort by total value and take top 15 for readability
+    group_summary = group_summary.sort_values('total_value', ascending=False).head(15)
+
+    # Need at least 2 groups for a meaningful chart
+    if len(group_summary) < 2:
+        return render_top_skus_dio_chart(inventory_data, currency)
+
+    # Create horizontal bar chart (more readable than heatmap for this data)
+    # Sort by DIO for the chart
+    group_summary = group_summary.sort_values('avg_dio', ascending=True)
+
+    # Color scale based on DIO (green=low/good, red=high/bad)
+    colors = ['#2ecc71' if dio < 60 else '#f39c12' if dio < 180 else '#e74c3c' for dio in group_summary['avg_dio']]
+
+    fig = go.Figure(data=go.Bar(
+        x=group_summary['avg_dio'].values,
+        y=group_summary[group_col].values,
+        orientation='h',
+        marker_color=colors,
+        text=group_summary['avg_dio'].apply(lambda x: f'{x:.0f} days').values,
+        textposition='auto',
+        hovertemplate=f'{group_label}: %{{y}}<br>Avg DIO: %{{x:.0f}} days<br>SKU Count: %{{customdata[0]:,}}<br>Units: %{{customdata[1]:,}}<extra></extra>',
+        customdata=group_summary[['sku_count', 'total_units']].values
+    ))
+
+    fig.update_layout(
+        title=f"{group_label} Benchmarking - Average DIO",
+        height=max(300, len(group_summary) * 28),  # Dynamic height based on number of bars
+        xaxis_title="Days Inventory Outstanding (DIO)",
+        yaxis_title="",
+        showlegend=False
+    )
+
+    # Add reference lines
+    fig.add_vline(x=60, line_dash="dash", line_color="green", annotation_text="Healthy (<60)", annotation_position="top")
+    fig.add_vline(x=180, line_dash="dash", line_color="orange", annotation_text="Slow (180)", annotation_position="top")
+
+    return fig
+
+
+def render_top_skus_dio_chart(inventory_data, currency="USD"):
+    """Fallback chart showing top SKUs by DIO when brand/category grouping isn't useful"""
+    if inventory_data.empty or 'dio' not in inventory_data.columns:
         return None
 
     value_col = f'stock_value_{currency.lower()}'
 
-    # Calculate metrics by category
-    category_summary = inventory_data.groupby('category').agg({
-        'dio': 'mean',
-        value_col: 'sum',
-        'sku': 'count',
-        'on_hand_qty': 'sum'
-    }).reset_index()
+    # Get top 15 SKUs by DIO (highest = most overstocked)
+    top_skus = inventory_data.nlargest(15, 'dio')[['sku', 'product_name', 'dio', 'on_hand_qty', value_col]].copy()
 
-    category_summary.columns = ['category', 'avg_dio', 'total_value', 'sku_count', 'total_units']
+    if top_skus.empty:
+        return None
 
-    # Add movement class distribution
-    movement_dist = inventory_data.groupby(['category', 'movement_class']).size().unstack(fill_value=0)
-    if 'Slow Moving' in movement_dist.columns:
-        category_summary = category_summary.merge(
-            movement_dist[['Slow Moving', 'Very Slow Moving', 'Obsolete Risk', 'Dead Stock']].sum(axis=1).reset_index(name='slow_count'),
-            left_on='category',
-            right_on='category',
-            how='left'
-        )
-    else:
-        category_summary['slow_count'] = 0
+    # Create display label
+    top_skus['label'] = top_skus.apply(
+        lambda r: f"{r['sku'][:20]}..." if len(str(r['sku'])) > 20 else str(r['sku']),
+        axis=1
+    )
 
-    category_summary['slow_pct'] = (category_summary['slow_count'] / category_summary['sku_count'] * 100).round(1)
+    # Sort ascending for horizontal bar chart (highest at top)
+    top_skus = top_skus.sort_values('dio', ascending=True)
 
-    # Sort by total value
-    category_summary = category_summary.sort_values('total_value', ascending=False).head(20)
+    # Color based on DIO severity
+    colors = ['#2ecc71' if dio < 60 else '#f39c12' if dio < 180 else '#e74c3c' for dio in top_skus['dio']]
 
-    # Create heatmap
-    fig = go.Figure(data=go.Heatmap(
-        z=[category_summary['avg_dio'].values],
-        x=category_summary['category'].values,
-        y=['Avg DIO (days)'],
-        colorscale='RdYlGn_r',
-        text=category_summary['avg_dio'].apply(lambda x: f'{x:.0f}').values,
-        texttemplate='%{text}',
-        textfont={"size": 10},
-        hovertemplate='Category: %{x}<br>Avg DIO: %{z:.0f} days<extra></extra>',
-        colorbar=dict(title="DIO (days)")
+    fig = go.Figure(data=go.Bar(
+        x=top_skus['dio'].values,
+        y=top_skus['label'].values,
+        orientation='h',
+        marker_color=colors,
+        text=top_skus['dio'].apply(lambda x: f'{x:.0f}').values,
+        textposition='auto',
+        hovertemplate='SKU: %{y}<br>DIO: %{x:.0f} days<br>On Hand: %{customdata[0]:,}<br>Value: $%{customdata[1]:,.0f}<extra></extra>',
+        customdata=top_skus[['on_hand_qty', value_col]].values
     ))
 
     fig.update_layout(
-        title="Category Benchmarking - Average DIO Heat Map",
-        height=200,
-        xaxis_title="Category",
-        yaxis_title=""
+        title="Top 15 SKUs by Days Inventory Outstanding",
+        height=400,
+        xaxis_title="Days Inventory Outstanding (DIO)",
+        yaxis_title="",
+        showlegend=False
     )
 
     return fig
@@ -1745,13 +1836,13 @@ def render_overview_health_tab(filtered_data, currency, settings):
                 avg_inv = sum(y) / len(y) if y else 0
                 st.metric("12-Month Avg", f"{int(avg_inv):,}")
 
-    # Category Benchmarking
-    st.markdown("#### 🏆 Category Benchmarking")
-    category_heatmap = render_category_heatmap(filtered_data, currency)
-    if category_heatmap:
-        render_chart(category_heatmap, height=250)
+    # Brand Benchmarking
+    st.markdown("#### 🏆 Brand Benchmarking")
+    brand_chart = render_brand_heatmap(filtered_data, currency)
+    if brand_chart:
+        render_chart(brand_chart, height=400)
     else:
-        render_info_box("Unable to generate category heatmap", type="info")
+        render_info_box("Unable to generate brand benchmarking chart", type="info")
 
 def render_alerts_risks_tab(filtered_data, currency):
     """Render Alerts & Risks tab content"""

@@ -904,24 +904,30 @@ def load_alternate_codes_mapping(file_path="ALTERNATE_CODES.csv"):
         col_last_old = 'SAP Material Last Old Code'
         col_original = 'SAP Material Original Code'
 
+        # Rename columns to be compatible with itertuples (replace spaces with underscores)
+        df.columns = [c.replace(' ', '_') for c in df.columns]
+        col_current_safe = col_current.replace(' ', '_')
+        col_last_old_safe = col_last_old.replace(' ', '_')
+        col_original_safe = col_original.replace(' ', '_')
+
         # Use itertuples() instead of iterrows() for 100x faster performance
         for row in df.itertuples():
-            current_code = str(getattr(row, col_current.replace(' ', '_').replace(':', '_'))).strip() if pd.notna(getattr(row, col_current.replace(' ', '_').replace(':', '_'), None)) else None
-            last_old_code = str(getattr(row, col_last_old.replace(' ', '_').replace(':', '_'))).strip() if pd.notna(getattr(row, col_last_old.replace(' ', '_').replace(':', '_'), None)) else None
-            original_code = str(getattr(row, col_original.replace(' ', '_').replace(':', '_'))).strip() if pd.notna(getattr(row, col_original.replace(' ', '_').replace(':', '_'), None)) else None
+            current_code = str(getattr(row, col_current_safe)).strip() if pd.notna(getattr(row, col_current_safe, None)) else None
+            last_old_code = str(getattr(row, col_last_old_safe)).strip() if pd.notna(getattr(row, col_last_old_safe, None)) else None
+            original_code = str(getattr(row, col_original_safe)).strip() if pd.notna(getattr(row, col_original_safe, None)) else None
 
             # Skip if no current code
-            if not current_code or current_code == 'nan':
+            if not current_code or current_code in ('nan', 'None', ''):
                 continue
 
             # Build list of all alternate codes for this family
             all_codes = [current_code]
 
-            if last_old_code and last_old_code != 'nan':
+            if last_old_code and last_old_code not in ('nan', 'None', ''):
                 all_codes.append(last_old_code)
                 old_to_current[last_old_code] = current_code
 
-            if original_code and original_code != 'nan' and original_code != last_old_code:
+            if original_code and original_code not in ('nan', 'None', '') and original_code != last_old_code:
                 all_codes.append(original_code)
                 old_to_current[original_code] = current_code
 

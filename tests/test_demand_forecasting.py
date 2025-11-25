@@ -107,3 +107,35 @@ class TestDemandForecasting:
 
         assert isinstance(forecast_30, pd.DataFrame)
         assert isinstance(forecast_90, pd.DataFrame)
+
+    def test_monthly_aggregation(self, sample_deliveries_df):
+        """When requesting monthly granularity, daily_demand_df should be aggregated to months"""
+        logs, forecast_df, accuracy_df, monthly_df = generate_demand_forecast(sample_deliveries_df, forecast_horizon_days=90, ts_granularity='monthly')
+
+        assert isinstance(monthly_df, pd.DataFrame)
+        # Dates should be month starts (day == 1) - check at least one record exists
+        if not monthly_df.empty:
+            assert (monthly_df['date'].dt.day == 1).any(), "Monthly series 'date' should align to month starts"
+
+    def test_rolling_12_months_preload(self, sample_deliveries_df):
+        """Request monthly granularity limited to last 12 months and ensure returned series respects window"""
+        logs, forecast_df, accuracy_df, monthly_df = generate_demand_forecast(sample_deliveries_df, forecast_horizon_days=90, ts_granularity='monthly', rolling_months=12)
+
+        assert isinstance(monthly_df, pd.DataFrame)
+        if not monthly_df.empty:
+            # compute month span in months between min and max
+            min_date = monthly_df['date'].min()
+            max_date = monthly_df['date'].max()
+            month_span = (max_date.year - min_date.year) * 12 + (max_date.month - min_date.month) + 1
+            assert month_span <= 12, f"Monthly DF should cover max 12 months but covers {month_span}"
+
+    def test_rolling_months_anchor_today(self, sample_deliveries_df):
+        """When rolling_months is used, the earliest included month should be anchored to TODAY."""
+        logs, forecast_df, accuracy_df, monthly_df = generate_demand_forecast(sample_deliveries_df, forecast_horizon_days=90, ts_granularity='monthly', rolling_months=6)
+
+        # If the function returned data, the min date should be >= (TODAY - months + 1 month start)
+        if not monthly_df.empty:
+            min_date = monthly_df['date'].min()
+            today = pd.to_datetime(datetime.now().date())
+            expected_earliest = (today - pd.DateOffset(months=5)).replace(day=1)
+            assert min_date >= expected_earliest, f"min_date {min_date} should be >= {expected_earliest}" 

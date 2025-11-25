@@ -231,6 +231,49 @@ def format_currency(value):
     return f"${value:,.0f}"
 
 
+def format_display_dataframe(df: pd.DataFrame, column_rename: dict) -> pd.DataFrame:
+    """Format a dataframe for display with proper number formatting.
+
+    Args:
+        df: DataFrame to format
+        column_rename: Dict mapping old column names to new display names
+
+    Returns:
+        Formatted DataFrame ready for display
+    """
+    display_df = df.rename(columns=column_rename)
+
+    # Define formatting rules by column type
+    integer_cols = ['Suggested Qty', 'On Hand', 'Reorder Point', 'Safety Stock',
+                    'Open PO Qty', 'Backorders']
+
+    for col in integer_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "0")
+
+    if 'Order Value ($)' in display_df.columns:
+        display_df['Order Value ($)'] = display_df['Order Value ($)'].apply(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "$0"
+        )
+
+    if 'Priority' in display_df.columns:
+        display_df['Priority'] = display_df['Priority'].apply(
+            lambda x: f"{x:.1f}" if pd.notna(x) else "0"
+        )
+
+    if 'Daily Demand' in display_df.columns:
+        display_df['Daily Demand'] = display_df['Daily Demand'].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) else "0"
+        )
+
+    if 'Days of Supply' in display_df.columns:
+        display_df['Days of Supply'] = display_df['Days of Supply'].apply(
+            lambda x: f"{x:.0f}" if pd.notna(x) and x != float('inf') else "N/A"
+        )
+
+    return display_df
+
+
 def render_replenishment_page(
     inventory_data: pd.DataFrame,
     demand_forecast_data: pd.DataFrame,
@@ -345,32 +388,7 @@ def render_replenishment_page(
 
     st.divider()
 
-    # ===== GRAND TOTAL SUMMARY BOX =====
-    total_suggested_qty = plan_df['suggested_order_qty'].sum() if 'suggested_order_qty' in plan_df.columns else 0
-    total_suggested_value = plan_df['order_value'].sum() if 'order_value' in plan_df.columns else 0
-    total_skus_need_orders = len(plan_df[plan_df['below_reorder_point'] == True]) if 'below_reorder_point' in plan_df.columns else len(plan_df)
-
-    st.markdown("""
-    <div style="background: linear-gradient(135deg, #1e3a5f, #2d5a87); padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-        <h2 style="color: white; margin: 0 0 15px 0; text-align: center;">📦 Total Replenishment Summary</h2>
-        <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
-            <div style="text-align: center; padding: 10px 20px;">
-                <div style="color: #90cdf4; font-size: 14px; text-transform: uppercase;">Total Units Needed</div>
-                <div style="color: white; font-size: 32px; font-weight: bold;">{:,.0f}</div>
-            </div>
-            <div style="text-align: center; padding: 10px 20px;">
-                <div style="color: #90cdf4; font-size: 14px; text-transform: uppercase;">Total Order Value</div>
-                <div style="color: white; font-size: 32px; font-weight: bold;">${:,.0f}</div>
-            </div>
-            <div style="text-align: center; padding: 10px 20px;">
-                <div style="color: #90cdf4; font-size: 14px; text-transform: uppercase;">SKUs Need Orders</div>
-                <div style="color: white; font-size: 32px; font-weight: bold;">{:,}</div>
-            </div>
-        </div>
-    </div>
-    """.format(total_suggested_qty, total_suggested_value, total_skus_need_orders), unsafe_allow_html=True)
-
-    # Apply filters
+    # Apply filters FIRST so we can use filtered data for summary
     filtered_df = plan_df.copy()
 
     # Filter: Only show items below reorder point (unless user wants all)
@@ -393,49 +411,87 @@ def render_replenishment_page(
     if settings['min_order_qty'] > 0:
         filtered_df = filtered_df[filtered_df['suggested_order_qty'] >= settings['min_order_qty']]
 
-    # Sort
-    if 'Priority Score' in settings['sort_by']:
-        filtered_df = filtered_df.sort_values('priority_score', ascending=False)
-    elif 'Order Value' in settings['sort_by']:
-        filtered_df = filtered_df.sort_values('order_value', ascending=False)
-    elif 'Days of Supply' in settings['sort_by']:
-        filtered_df = filtered_df.sort_values('days_of_supply', ascending=True)
-    else:  # Vendor
-        filtered_df = filtered_df.sort_values(['vendor', 'priority_score'], ascending=[True, False])
+    # ===== GRAND TOTAL SUMMARY BOX (uses filtered data - default is RETAIL PERMANENT) =====
+    total_suggested_qty = filtered_df['suggested_order_qty'].sum() if 'suggested_order_qty' in filtered_df.columns else 0
+    total_suggested_value = filtered_df['order_value'].sum() if 'order_value' in filtered_df.columns else 0
+    total_skus_need_orders = len(filtered_df[filtered_df['below_reorder_point'] == True]) if 'below_reorder_point' in filtered_df.columns else len(filtered_df)
 
-    # Show filter summary
-    if settings['vendor_filter'] or settings['sku_search'] or settings['min_order_qty'] > 0:
-        filter_parts = []
-        if settings['vendor_filter']:
-            filter_parts.append(f"Vendor: '{settings['vendor_filter']}'")
-        if settings['sku_search']:
-            filter_parts.append(f"SKU: '{settings['sku_search']}'")
-        if settings['min_order_qty'] > 0:
-            filter_parts.append(f"Min Qty: {settings['min_order_qty']}")
-        st.caption(f"🔍 Active filters: {', '.join(filter_parts)} | Showing {len(filtered_df):,} of {len(plan_df):,} SKUs")
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #1e3a5f, #2d5a87); padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+        <h2 style="color: white; margin: 0 0 15px 0; text-align: center;">📦 Total Replenishment Summary (RETAIL PERMANENT)</h2>
+        <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
+            <div style="text-align: center; padding: 10px 20px;">
+                <div style="color: #90cdf4; font-size: 14px; text-transform: uppercase;">Total Units Needed</div>
+                <div style="color: white; font-size: 32px; font-weight: bold;">{:,.0f}</div>
+            </div>
+            <div style="text-align: center; padding: 10px 20px;">
+                <div style="color: #90cdf4; font-size: 14px; text-transform: uppercase;">Total Order Value</div>
+                <div style="color: white; font-size: 32px; font-weight: bold;">${:,.0f}</div>
+            </div>
+            <div style="text-align: center; padding: 10px 20px;">
+                <div style="color: #90cdf4; font-size: 14px; text-transform: uppercase;">SKUs Need Orders</div>
+                <div style="color: white; font-size: 32px; font-weight: bold;">{:,}</div>
+            </div>
+        </div>
+    </div>
+    """.format(total_suggested_qty, total_suggested_value, total_skus_need_orders), unsafe_allow_html=True)
 
-    # ===== KPI ROW (Filtered Data) =====
-    st.markdown("### 📊 Filtered Results Summary")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # ===== SUGGESTED ORDERS TABLE (right after summary) =====
+    st.subheader("📋 Suggested Orders")
 
-    total_order_value = filtered_df['order_value'].sum() if 'order_value' in filtered_df.columns else 0
-    total_skus = len(filtered_df)
-    total_vendors = filtered_df['vendor'].nunique() if 'vendor' in filtered_df.columns else 0
-    avg_priority = filtered_df['priority_score'].mean() if len(filtered_df) > 0 else 0
-    critical_count = len(filtered_df[filtered_df['priority_score'] >= 80]) if 'priority_score' in filtered_df.columns else 0
+    # Filter out $0 order values and sort by order_value descending
+    table_df = filtered_df[filtered_df['order_value'] > 0].copy()
+    table_df = table_df.sort_values('order_value', ascending=False)
 
-    with col1:
-        st.metric("Total Order Value", format_currency(total_order_value))
-    with col2:
-        st.metric("SKUs Needing Orders", f"{total_skus:,}")
-    with col3:
-        st.metric("Vendors", f"{total_vendors:,}")
-    with col4:
-        st.metric("Avg Priority Score", f"{avg_priority:.1f}")
-    with col5:
-        st.metric("Critical Items (80+)", f"{critical_count:,}",
-                  delta=None if critical_count == 0 else "Urgent",
-                  delta_color="inverse")
+    # Column configuration for display
+    DISPLAY_COLUMNS = [
+        'sku', 'product_name', 'vendor', 'suggested_order_qty',
+        'order_value', 'priority_score', 'on_hand_qty', 'days_of_supply',
+        'reorder_point', 'safety_stock', 'open_po_qty', 'backorder_qty',
+        'daily_demand', 'lead_time_days'
+    ]
+
+    COLUMN_RENAME = {
+        'sku': 'SKU',
+        'product_name': 'SKU Description',
+        'vendor': 'Vendor',
+        'suggested_order_qty': 'Suggested Qty',
+        'order_value': 'Order Value ($)',
+        'priority_score': 'Priority',
+        'on_hand_qty': 'On Hand',
+        'days_of_supply': 'Days of Supply',
+        'reorder_point': 'Reorder Point',
+        'safety_stock': 'Safety Stock',
+        'open_po_qty': 'Open PO Qty',
+        'backorder_qty': 'Backorders',
+        'daily_demand': 'Daily Demand',
+        'lead_time_days': 'Lead Time (days)'
+    }
+
+    # Filter to available columns and format
+    available_cols = [c for c in DISPLAY_COLUMNS if c in table_df.columns]
+    display_df = format_display_dataframe(table_df[available_cols].copy(), COLUMN_RENAME)
+
+    # Show count
+    st.caption(f"Showing {len(display_df):,} items | Sorted by Order Value (highest first)")
+
+    # Data table with download
+    st.dataframe(display_df, use_container_width=True, height=400)
+
+    # Download buttons
+    col_dl1, col_dl2, col_dl3 = st.columns([1, 1, 2])
+
+    with col_dl1:
+        csv_buffer = BytesIO()
+        filtered_df.to_csv(csv_buffer, index=False)
+        csv_buffer.seek(0)
+
+        st.download_button(
+            label="📥 Download Full Data (CSV)",
+            data=csv_buffer,
+            file_name=f"replenishment_plan_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
 
     st.divider()
 
@@ -452,115 +508,17 @@ def render_replenishment_page(
         if priority_chart:
             st.plotly_chart(priority_chart, use_container_width=True)
 
-    st.divider()
+    # Show filter summary at bottom
+    if settings['vendor_filter'] or settings['sku_search'] or settings['min_order_qty'] > 0:
+        filter_parts = []
+        if settings['vendor_filter']:
+            filter_parts.append(f"Vendor: '{settings['vendor_filter']}'")
+        if settings['sku_search']:
+            filter_parts.append(f"SKU: '{settings['sku_search']}'")
+        if settings['min_order_qty'] > 0:
+            filter_parts.append(f"Min Qty: {settings['min_order_qty']}")
+        st.caption(f"🔍 Active filters: {', '.join(filter_parts)} | Showing {len(filtered_df):,} of {len(plan_df):,} SKUs")
 
-    # ===== MAIN DATA TABLE =====
-    st.subheader("📋 Suggested Orders")
-
-    # Select columns for display
-    display_columns = [
-        'sku', 'product_description', 'vendor', 'suggested_order_qty',
-        'order_value', 'priority_score', 'on_hand_qty', 'days_of_supply',
-        'reorder_point', 'safety_stock', 'open_po_qty', 'backorder_qty',
-        'daily_demand', 'lead_time_days'
-    ]
-
-    # Filter to available columns
-    available_cols = [c for c in display_columns if c in filtered_df.columns]
-    display_df = filtered_df[available_cols].copy()
-
-    # Rename columns for better display
-    column_rename = {
-        'sku': 'SKU',
-        'product_description': 'Description',
-        'vendor': 'Vendor',
-        'suggested_order_qty': 'Suggested Qty',
-        'order_value': 'Order Value ($)',
-        'priority_score': 'Priority',
-        'on_hand_qty': 'On Hand',
-        'days_of_supply': 'Days of Supply',
-        'reorder_point': 'Reorder Point',
-        'safety_stock': 'Safety Stock',
-        'open_po_qty': 'Open PO Qty',
-        'backorder_qty': 'Backorders',
-        'daily_demand': 'Daily Demand',
-        'lead_time_days': 'Lead Time (days)'
-    }
-    display_df = display_df.rename(columns=column_rename)
-
-    # Format numeric columns
-    numeric_cols = ['Suggested Qty', 'On Hand', 'Reorder Point', 'Safety Stock',
-                    'Open PO Qty', 'Backorders']
-    for col in numeric_cols:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "0")
-
-    if 'Order Value ($)' in display_df.columns:
-        display_df['Order Value ($)'] = display_df['Order Value ($)'].apply(
-            lambda x: f"${x:,.0f}" if pd.notna(x) else "$0"
-        )
-
-    if 'Priority' in display_df.columns:
-        display_df['Priority'] = display_df['Priority'].apply(
-            lambda x: f"{x:.1f}" if pd.notna(x) else "0"
-        )
-
-    if 'Daily Demand' in display_df.columns:
-        display_df['Daily Demand'] = display_df['Daily Demand'].apply(
-            lambda x: f"{x:.2f}" if pd.notna(x) else "0"
-        )
-
-    if 'Days of Supply' in display_df.columns:
-        display_df['Days of Supply'] = display_df['Days of Supply'].apply(
-            lambda x: f"{x:.0f}" if pd.notna(x) and x != float('inf') else "N/A"
-        )
-
-    # Show count
-    st.caption(f"Showing {len(display_df):,} items")
-
-    # Data table with download
-    st.dataframe(display_df, use_container_width=True, height=500)
-
-    # Download button
-    col_dl1, col_dl2, col_dl3 = st.columns([1, 1, 2])
-
-    with col_dl1:
-        # Download full data (unformatted for import)
-        csv_buffer = BytesIO()
-        filtered_df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)
-
-        st.download_button(
-            label="📥 Download Full Data (CSV)",
-            data=csv_buffer,
-            file_name=f"replenishment_plan_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-
-    with col_dl2:
-        # Download vendor summary
-        if 'vendor' in filtered_df.columns:
-            vendor_summary = filtered_df.groupby('vendor').agg({
-                'suggested_order_qty': 'sum',
-                'order_value': 'sum',
-                'sku': 'count',
-                'priority_score': 'mean'
-            }).reset_index()
-            vendor_summary.columns = ['Vendor', 'Total Qty', 'Total Value', 'SKU Count', 'Avg Priority']
-            vendor_summary = vendor_summary.sort_values('Total Value', ascending=False)
-
-            vendor_csv = BytesIO()
-            vendor_summary.to_csv(vendor_csv, index=False)
-            vendor_csv.seek(0)
-
-            st.download_button(
-                label="📥 Download Vendor Summary",
-                data=vendor_csv,
-                file_name=f"replenishment_vendor_summary_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-
-    st.divider()
 
     # ===== VENDOR BREAKDOWN =====
     with st.expander("📊 Vendor Breakdown", expanded=False):

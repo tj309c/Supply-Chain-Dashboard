@@ -72,10 +72,12 @@ def predict_stockout_risk(inventory_df, deliveries_df, vendor_pos_df, vendor_per
     if 'ship_date' not in deliveries_df.columns:
         # Unified format - need to rename columns
         logs.append("INFO: Processing unified deliveries format (renaming columns)...")
-        deliveries_processed = deliveries_df[["Item - SAP Model Code", "Delivery Creation Date: Date", "Deliveries - TOTAL Goods Issue Qty"]].copy()
+        # Prefer Goods Issue Date when available, otherwise fall back to Delivery Creation Date
+        date_col = 'Goods Issue Date: Date' if 'Goods Issue Date: Date' in deliveries_df.columns else 'Delivery Creation Date: Date'
+        deliveries_processed = deliveries_df[["Item - SAP Model Code", date_col, "Deliveries - TOTAL Goods Issue Qty"]].copy()
         deliveries_processed = deliveries_processed.rename(columns={
             "Item - SAP Model Code": "sku",
-            "Delivery Creation Date: Date": "ship_date",
+            date_col: "ship_date",
             "Deliveries - TOTAL Goods Issue Qty": "units_issued"
         })
 

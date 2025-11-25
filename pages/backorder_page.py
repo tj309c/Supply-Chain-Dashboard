@@ -636,14 +636,19 @@ def categorize_root_causes(backorder_data, backorder_relief_data=None, deliverie
 
                 sentinel_rows = gid_vals.loc[sentinel_mask, [key_sales, key_sku]].drop_duplicates()
 
-                # Build set of keys to flag as logistics backorders
-                sentinel_set = set()
-                for _, r in sentinel_rows.iterrows():
-                    sentinel_set.add((str(r[key_sales]).strip(), str(r[key_sku]).strip()))
+                # PERFORMANCE: Build set using vectorized operations instead of iterrows
+                sentinel_set = set(zip(
+                    sentinel_rows[key_sales].astype(str).str.strip(),
+                    sentinel_rows[key_sku].astype(str).str.strip()
+                ))
 
                 if sentinel_set:
-                    # Mark matching backorders as logistics stage and as a root cause
-                    match_mask = bo_data.apply(lambda r: (str(r.get('sales_order', '')).strip(), str(r.get('sku', '')).strip()) in sentinel_set, axis=1)
+                    # PERFORMANCE: Use tuple isin instead of apply(axis=1)
+                    bo_tuples = list(zip(
+                        bo_data['sales_order'].astype(str).str.strip(),
+                        bo_data['sku'].astype(str).str.strip()
+                    ))
+                    match_mask = pd.Series([t in sentinel_set for t in bo_tuples], index=bo_data.index)
                     if match_mask.any():
                         bo_data.loc[match_mask, 'backorder_stage'] = 'logistics'
                         bo_data.loc[match_mask, 'root_cause'] = 'Logistics Backorder'

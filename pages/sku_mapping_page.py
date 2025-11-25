@@ -1,7 +1,7 @@
 """
 SKU Mapping & Alternate Codes Page
 Displays material code relationships, supersessions, and code transitions
-Helps identify inventory split across old/new codes and backorder opportunities
+PRIMARY FOCUS: Highlight alternate SKUs on backorder to alert users to update orders to NEW material codes
 """
 
 import streamlit as st
@@ -69,6 +69,73 @@ def analyze_inventory_split(inventory_data, alt_codes_mapping):
             })
 
     return pd.DataFrame(split_inventory)
+
+
+def analyze_old_code_backorders(backorder_data, inventory_data):
+    """
+    Find ALL backorders on old/alternate codes that need to be updated to new codes.
+
+    This is the PRIMARY analysis - identifies orders placed on obsolete material codes
+    that need to be changed to the current/new material code.
+
+    Returns DataFrame with all old code backorders requiring action
+    """
+    if backorder_data.empty:
+        return pd.DataFrame()
+
+    # Normalize codes and identify old code backorders
+    backorder_with_current = backorder_data.copy()
+    backorder_with_current['current_code'] = backorder_with_current['sku'].apply(get_current_code)
+    backorder_with_current['is_old'] = backorder_with_current['sku'].apply(is_old_code)
+
+    # Find ALL backorders on old codes - these ALL need attention
+    old_code_backorders = backorder_with_current[backorder_with_current['is_old'] == True].copy()
+
+    if old_code_backorders.empty:
+        return pd.DataFrame()
+
+    # Check inventory availability on current code (optional - for prioritization)
+    inventory_by_current = {}
+    if not inventory_data.empty:
+        inventory_with_current = inventory_data.copy()
+        inventory_with_current['current_code'] = inventory_with_current['sku'].apply(get_current_code)
+        inventory_by_current = inventory_with_current.groupby('current_code')['on_hand_qty'].sum().to_dict()
+
+    # Build the analysis dataframe
+    old_code_backorders['new_code'] = old_code_backorders['current_code']
+    old_code_backorders['inventory_on_new_code'] = old_code_backorders['current_code'].map(
+        lambda x: inventory_by_current.get(x, 0)
+    )
+    old_code_backorders['can_fulfill_now'] = old_code_backorders.apply(
+        lambda row: row['inventory_on_new_code'] >= row['backorder_qty'], axis=1
+    )
+
+    # Priority: Critical (60+ days), High (30+ days), Medium (14+ days), Low (<14 days)
+    def get_priority(days):
+        if days >= 60:
+            return 'Critical'
+        elif days >= 30:
+            return 'High'
+        elif days >= 14:
+            return 'Medium'
+        return 'Low'
+
+    old_code_backorders['priority'] = old_code_backorders['days_on_backorder'].apply(get_priority)
+
+    # Select relevant columns
+    result = old_code_backorders[[
+        'sku', 'new_code', 'backorder_qty', 'customer_name', 'sales_order',
+        'days_on_backorder', 'priority', 'inventory_on_new_code', 'can_fulfill_now'
+    ]].rename(columns={
+        'sku': 'old_code',
+        'customer_name': 'customer',
+        'sales_order': 'order_number'
+    })
+
+    return result.sort_values(['priority', 'days_on_backorder'],
+                               key=lambda x: x.map({'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3})
+                               if x.name == 'priority' else -x,
+                               ascending=[True, False])
 
 
 def analyze_backorder_opportunities(backorder_data, inventory_data, alt_codes_mapping):
@@ -183,7 +250,7 @@ def render_sku_mapping_page(inventory_data, backorder_data):
     render_page_header(
         "SKU Mapping & Alternate Codes",
         icon="🔄",
-        subtitle="Material code relationships, supersessions, and code transition tracking"
+        subtitle="Identify orders on OLD material codes that need to be updated to NEW codes"
     )
 
     # Load alternate codes mapping
@@ -198,172 +265,236 @@ def render_sku_mapping_page(inventory_data, backorder_data):
         )
         return
 
-    # Display summary metrics
-    st.subheader("📊 Alternate Codes Summary")
+    # ============================================================
+    # PRIMARY SECTION: BACKORDERS ON OLD/ALTERNATE CODES
+    # This is the main focus - orders that need code updates
+    # ============================================================
 
-    col1, col2, col3, col4 = st.columns(4)
+    old_code_backorders = analyze_old_code_backorders(backorder_data, inventory_data)
 
-    with col1:
-        st.metric(
-            "SKU Families",
-            f"{summary['total_sku_families']:,}",
-            help="Number of SKU families with alternate codes. Each family has 1 current code + 1 or more old codes."
-        )
+    if not old_code_backorders.empty:
+        total_orders = len(old_code_backorders)
+        total_units = old_code_backorders['backorder_qty'].sum()
+        critical_count = len(old_code_backorders[old_code_backorders['priority'] == 'Critical'])
+        high_count = len(old_code_backorders[old_code_backorders['priority'] == 'High'])
+        can_fulfill_now = len(old_code_backorders[old_code_backorders['can_fulfill_now'] == True])
 
-    with col2:
-        st.metric(
-            "Total Old Codes",
-            f"{summary['total_old_codes']:,}",
-            help="Total number of obsolete/superseded material codes"
-        )
+        # Alert banner for action required
+        st.error(f"""
+        **ACTION REQUIRED: {total_orders} Orders on OLD Material Codes**
 
-    with col3:
-        st.metric(
-            "Families with 2 Codes",
-            f"{summary['families_with_2_codes']:,}",
-            help="SKU families with exactly 2 codes (1 current + 1 old)"
-        )
+        These backorders are placed on obsolete/superseded SKU codes. **Sales team must update these orders to use the NEW material code.**
+        """)
 
-    with col4:
-        st.metric(
-            "Families with 3+ Codes",
-            f"{summary['families_with_3_codes']:,}",
-            help="SKU families with 3 or more codes (1 current + 2+ old)"
-        )
+        # Key metrics
+        col1, col2, col3, col4 = st.columns(4)
 
-    st.divider()
-
-    # === INVENTORY SPLIT ANALYSIS ===
-    st.subheader("📦 Inventory Split Across Codes")
-
-    split_analysis = analyze_inventory_split(inventory_data, alt_codes_mapping)
-
-    if not split_analysis.empty:
-        total_split_value = split_analysis['total_value_usd'].sum()
-        total_split_families = len(split_analysis)
-
-        col1, col2 = st.columns(2)
         with col1:
             st.metric(
-                "SKU Families with Split Inventory",
-                f"{total_split_families:,}",
-                help="Number of SKU families with inventory on multiple material codes"
+                "Orders on Old Codes",
+                f"{total_orders:,}",
+                help="Total backorders placed on obsolete material codes"
             )
+
         with col2:
             st.metric(
-                "Total Value of Split Inventory",
-                f"${total_split_value:,.0f}",
-                help="Total USD value of inventory split across alternate codes"
+                "Total Units",
+                f"{int(total_units):,}",
+                help="Total quantity on backorder with old codes"
             )
 
-        # Display top split inventory
-        st.markdown("#### Top 20 SKU Families with Split Inventory")
+        with col3:
+            delta_text = "URGENT" if (critical_count + high_count) > 0 else None
+            st.metric(
+                "Critical + High Priority",
+                f"{critical_count + high_count:,}",
+                delta=delta_text,
+                delta_color="inverse" if delta_text else "off",
+                help="Critical (60+ days) + High (30+ days) priority orders"
+            )
 
-        display_split = split_analysis.sort_values('total_value_usd', ascending=False).head(20).copy()
+        with col4:
+            st.metric(
+                "Can Fulfill Immediately",
+                f"{can_fulfill_now:,}",
+                help="Orders where inventory exists on new code - can ship once code is updated"
+            )
 
-        # Format for display
-        display_split['Codes Detail'] = display_split['codes_detail'].apply(
-            lambda x: ', '.join([
-                f"{c['code']}{'*' if c['is_old'] else ''} ({c['qty']} units)"
-                for c in x
-            ])
+        st.divider()
+
+        # === SALES TEAM ACTION CALLOUT ===
+        st.markdown("### Sales Team Action Required")
+
+        st.warning("""
+        **For each order below, contact the Sales team to:**
+
+        1. Update the material code on the sales order from the **OLD code** to the **NEW code**
+        2. Once updated, the order can be fulfilled from available inventory
+
+        **Why this matters:** Orders cannot ship because they reference obsolete material codes. The product exists under the new code.
+        """)
+
+        # Priority filter
+        priority_filter = st.selectbox(
+            "Filter by Priority",
+            options=["All", "Critical (60+ days)", "High (30+ days)", "Medium (14+ days)", "Low (<14 days)"],
+            index=0
         )
 
+        filtered_data = old_code_backorders.copy()
+        if priority_filter != "All":
+            priority_map = {
+                "Critical (60+ days)": "Critical",
+                "High (30+ days)": "High",
+                "Medium (14+ days)": "Medium",
+                "Low (<14 days)": "Low"
+            }
+            filtered_data = filtered_data[filtered_data['priority'] == priority_map[priority_filter]]
+
+        # Format display table
         display_df = pd.DataFrame({
-            'Current Code': display_split['current_code'],
-            'Num Codes': display_split['num_codes_with_inventory'],
-            'Total Qty': display_split['total_qty'],
-            'Total Value (USD)': display_split['total_value_usd'].apply(lambda x: f"${x:,.0f}"),
-            'Distribution': display_split['Codes Detail']
+            'Priority': filtered_data['priority'],
+            'OLD Code (On Order)': filtered_data['old_code'],
+            'NEW Code (Update To)': filtered_data['new_code'],
+            'Qty': filtered_data['backorder_qty'].astype(int),
+            'Customer': filtered_data['customer'],
+            'Order #': filtered_data['order_number'],
+            'Days on BO': filtered_data['days_on_backorder'].astype(int),
+            'Inventory on New Code': filtered_data['inventory_on_new_code'].astype(int),
+            'Can Ship Now': filtered_data['can_fulfill_now'].apply(lambda x: "Yes" if x else "No")
         })
 
-        render_data_table(display_df, max_rows=20)
-        st.caption("* indicates old/obsolete code")
+        # Color code priority for visual emphasis
+        def highlight_priority(val):
+            if val == 'Critical':
+                return 'background-color: #ff4444; color: white; font-weight: bold'
+            elif val == 'High':
+                return 'background-color: #ff8800; color: white; font-weight: bold'
+            elif val == 'Medium':
+                return 'background-color: #ffcc00; color: black'
+            return ''
+
+        st.dataframe(
+            display_df.style.applymap(highlight_priority, subset=['Priority']),
+            use_container_width=True,
+            hide_index=True,
+            height=400
+        )
+
+        # Summary by customer for sales team
+        with st.expander("Summary by Customer (for Sales Team)", expanded=False):
+            customer_summary = old_code_backorders.groupby('customer').agg({
+                'order_number': 'count',
+                'backorder_qty': 'sum',
+                'days_on_backorder': 'max'
+            }).reset_index()
+            customer_summary.columns = ['Customer', 'Orders Affected', 'Total Units', 'Max Days on BO']
+            customer_summary = customer_summary.sort_values('Total Units', ascending=False)
+
+            st.dataframe(customer_summary, use_container_width=True, hide_index=True)
+
+        # Summary by old code
+        with st.expander("Summary by Old Code", expanded=False):
+            code_summary = old_code_backorders.groupby(['old_code', 'new_code']).agg({
+                'order_number': 'count',
+                'backorder_qty': 'sum'
+            }).reset_index()
+            code_summary.columns = ['Old Code', 'New Code', 'Orders', 'Total Units']
+            code_summary = code_summary.sort_values('Total Units', ascending=False)
+
+            st.dataframe(code_summary, use_container_width=True, hide_index=True)
 
     else:
-        render_info_box(
-            "No inventory split detected. All SKU families have inventory consolidated under one code.",
-            type="success"
-        )
+        st.success("""
+        **No backorders on old/alternate codes.**
+
+        All current backorders are on active material codes - no code updates needed.
+        """)
 
     st.divider()
 
-    # === BACKORDER OPPORTUNITIES ===
-    st.subheader("⚠️ Backorder Fulfillment Opportunities")
-    st.caption("Old code backorders that can be fulfilled with current code inventory")
+    # ============================================================
+    # SECONDARY: Alternate Codes Summary & Reference
+    # ============================================================
 
-    opportunities = analyze_backorder_opportunities(backorder_data, inventory_data, alt_codes_mapping)
-
-    if not opportunities.empty:
-        total_opportunities = len(opportunities)
-        total_fulfillable_units = opportunities['can_fulfill_qty'].sum()
-        high_priority = len(opportunities[opportunities['priority'] == 'High'])
-
-        col1, col2, col3 = st.columns(3)
+    with st.expander("Alternate Codes Summary", expanded=False):
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.metric(
-                "Total Opportunities",
-                f"{total_opportunities:,}",
-                help="Number of backorders on old codes that can be fulfilled with current code inventory"
+                "SKU Families",
+                f"{summary['total_sku_families']:,}",
+                help="Number of SKU families with alternate codes"
             )
 
         with col2:
             st.metric(
-                "Fulfillable Units",
-                f"{int(total_fulfillable_units):,}",
-                help="Total units that can be fulfilled by switching to current code"
+                "Total Old Codes",
+                f"{summary['total_old_codes']:,}",
+                help="Total obsolete/superseded material codes"
             )
 
         with col3:
             st.metric(
-                "High Priority (30+ days)",
-                f"{high_priority:,}",
-                delta="⚠️" if high_priority > 0 else None,
-                help="Backorders aged 30+ days that can be fulfilled immediately"
+                "Families with 2 Codes",
+                f"{summary['families_with_2_codes']:,}",
+                help="SKU families with 1 current + 1 old code"
             )
 
-        # Display opportunities
-        st.markdown("#### Backorder Fulfillment Recommendations")
+        with col4:
+            st.metric(
+                "Families with 3+ Codes",
+                f"{summary['families_with_3_codes']:,}",
+                help="SKU families with multiple old codes"
+            )
 
-        display_opps = opportunities.sort_values('days_on_backorder', ascending=False).copy()
+    # ============================================================
+    # SECONDARY: Inventory Split Analysis (collapsed by default)
+    # ============================================================
 
-        display_df = pd.DataFrame({
-            'Priority': display_opps['priority'],
-            'Old Code (Backorder)': display_opps['old_code_backorder'],
-            'Current Code (Inventory)': display_opps['current_code'],
-            'Backorder Qty': display_opps['backorder_qty'].astype(int),
-            'Available Qty': display_opps['available_qty_current_code'].astype(int),
-            'Can Fulfill': display_opps['can_fulfill_qty'].astype(int),
-            'Days on BO': display_opps['days_on_backorder'].astype(int),
-            'Customer': display_opps['customer'],
-            'Order #': display_opps['order_number']
-        })
+    with st.expander("Inventory Split Across Codes", expanded=False):
+        split_analysis = analyze_inventory_split(inventory_data, alt_codes_mapping)
 
-        render_data_table(display_df, max_rows=50)
+        if not split_analysis.empty:
+            total_split_value = split_analysis['total_value_usd'].sum()
+            total_split_families = len(split_analysis)
 
-        # Action recommendations
-        with st.expander("📋 Recommended Actions", expanded=True):
-            st.markdown("""
-            **Steps to fulfill these backorders:**
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(
+                    "SKU Families with Split Inventory",
+                    f"{total_split_families:,}",
+                    help="Families with inventory on multiple codes"
+                )
+            with col2:
+                st.metric(
+                    "Total Value of Split Inventory",
+                    f"${total_split_value:,.0f}",
+                    help="USD value of inventory split across codes"
+                )
 
-            1. **Update Order Material Code**: Change the material code on the sales order from old code to current code
-            2. **Verify Inventory Availability**: Confirm current code inventory is not allocated to other orders
-            3. **Process Fulfillment**: Release order for picking and shipping
-            4. **Prioritize by Age**: Start with backorders aged 30+ days (High Priority)
-            5. **Utilize Old Inventory First**: Per business rules, deplete old code inventory before using new code
+            display_split = split_analysis.sort_values('total_value_usd', ascending=False).head(20).copy()
 
-            **Business Value:**
-            - Reduce backorder age and improve customer satisfaction
-            - Free up warehouse space by depleting obsolete SKU inventory
-            - Improve inventory turnover and reduce holding costs
-            """)
+            display_split['Codes Detail'] = display_split['codes_detail'].apply(
+                lambda x: ', '.join([
+                    f"{c['code']}{'*' if c['is_old'] else ''} ({c['qty']} units)"
+                    for c in x
+                ])
+            )
 
-    else:
-        render_info_box(
-            "No backorder opportunities found. All backorders are on current codes or no inventory available.",
-            type="info"
-        )
+            display_df = pd.DataFrame({
+                'Current Code': display_split['current_code'],
+                'Num Codes': display_split['num_codes_with_inventory'],
+                'Total Qty': display_split['total_qty'],
+                'Total Value (USD)': display_split['total_value_usd'].apply(lambda x: f"${x:,.0f}"),
+                'Distribution': display_split['Codes Detail']
+            })
+
+            render_data_table(display_df, max_rows=20)
+            st.caption("* indicates old/obsolete code")
+
+        else:
+            st.info("No inventory split detected. All inventory consolidated under one code per family.")
 
     st.divider()
 
