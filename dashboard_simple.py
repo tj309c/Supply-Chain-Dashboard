@@ -110,7 +110,7 @@ st.markdown("""
 # ===== DATA LOADING =====
 # Remove caching from load_all_data to fix CacheReplayClosureError
 
-def load_all_data(_progress_callback=None):
+def load_all_data(_progress_callback=None, retail_only=True):
     """Load all data sources with optimized unified pattern
 
     Args:
@@ -138,14 +138,47 @@ def load_all_data(_progress_callback=None):
         update_progress(0.25, "Loading orders data...")
         logs_orders, orders_unified_df = load_orders_unified(ORDERS_PATH, file_key='orders')
 
+        # If retail-only mode is enabled, build a whitelist of SKUs from master data
+        # and filter the unified order/delivery sets early to reduce downstream processing.
+        # NOTE: We normalize SKU strings (trim + collapse whitespace + uppercase) to
+        # avoid mismatches caused by formatting differences across files.
+        retail_skus = set()
+        retail_mode_fallbacked = False
+        retail_mode_applied = False
+        retail_sku_count = 0
+        def _normalize_skus(series):
+            return series.astype(str).str.strip().str.replace(r"\s+", " ", regex=True).str.upper()
+
+        if retail_only and not master_data_df.empty and 'category' in master_data_df.columns:
+            retail_mask = master_data_df['category'].astype(str).str.strip().str.upper() == 'RETAIL PERMANENT'
+            master_retail_skus = master_data_df.loc[retail_mask, 'sku'].astype(str).tolist()
+            # create a normalized set for comparison
+            retail_skus = set(_normalize_skus(pd.Series(master_retail_skus)).tolist())
+            retail_sku_count = len(retail_skus)
+            if retail_sku_count > 0:
+                logs_orders.append(f"INFO: RETAIL PERMANENT mode enabled - filtering using {retail_sku_count} SKUs (normalized matching).")
+
         # Process orders data for item and header lookups (35%)
         update_progress(0.35, "Processing order details...")
+        # If retail_only is active and retail_skus is populated, filter unified file first
+        # Normalize order SKUs on the fly for robust matching.
+        if retail_only and retail_skus:
+            # Keep original copy in case the filter removes everything (we'll fall back)
+            _orders_original = orders_unified_df
+            orders_norm = _normalize_skus(orders_unified_df['Item - SAP Model Code'])
+            orders_unified_df = orders_unified_df[orders_norm.isin(retail_skus)]
+
         logs_item, orders_item_df, errors_item = load_orders_item_lookup(orders_unified_df)
         logs_header, orders_header_df = load_orders_header_lookup(orders_unified_df)
 
         # Load deliveries data using unified pattern (read once) (50%)
         update_progress(0.50, "Loading deliveries data...")
         logs_deliveries, deliveries_unified_df = load_deliveries_unified(DELIVERIES_PATH, file_key='deliveries')
+        if retail_only and retail_skus:
+            # Keep original copy for fallback
+            _deliveries_original = deliveries_unified_df
+            deliveries_norm = _normalize_skus(deliveries_unified_df['Item - SAP Model Code'])
+            deliveries_unified_df = deliveries_unified_df[deliveries_norm.isin(retail_skus)]
 
         # Load service data (65%)
         update_progress(0.65, "Calculating service levels...")
@@ -166,6 +199,10 @@ def load_all_data(_progress_callback=None):
         # Load inventory data (85%)
         update_progress(0.85, "Loading inventory snapshot...")
         logs_inventory, inventory_data_df, errors_inventory = load_inventory_data(INVENTORY_PATH, file_key='inventory')
+        if retail_only and retail_skus:
+            _inventory_original = inventory_data_df
+            inventory_norm = _normalize_skus(inventory_data_df['sku']) if 'sku' in inventory_data_df.columns else pd.Series(dtype=str)
+            inventory_data_df = inventory_data_df[inventory_norm.isin(retail_skus)]
 
         # Load inventory analysis data (85%)
         update_progress(0.85, "Computing inventory analytics...")
@@ -178,10 +215,84 @@ def load_all_data(_progress_callback=None):
         # Load vendor PO data (87%)
         update_progress(0.87, "Loading vendor purchase orders...")
         logs_vendor_pos, vendor_pos_df = load_vendor_pos(VENDOR_POS_PATH, file_key='vendor_pos')
+        if retail_only and retail_skus:
+            if 'sku' in vendor_pos_df.columns:
+                _vendor_pos_original = vendor_pos_df
+                vendor_norm = _normalize_skus(vendor_pos_df['sku'])
+                vendor_pos_df = vendor_pos_df[vendor_norm.isin(retail_skus)]
 
         # Load inbound receipt data (89%)
         update_progress(0.89, "Loading inbound receipts...")
         logs_inbound, inbound_df = load_inbound_data(INBOUND_PATH, file_key='inbound')
+        if retail_only and retail_skus:
+            if 'sku' in inbound_df.columns:
+                _inbound_original = inbound_df
+                inbound_norm = _normalize_skus(inbound_df['sku'])
+                inbound_df = inbound_df[inbound_norm.isin(retail_skus)]
+
+        # If retail_only filtering removed rows from one or more primary sources,
+        # restore each affected source individually (falls back to original copy where available).
+        # This prevents a single-source dropout (e.g., inventory) from showing N/A across the UI.
+        if retail_only and retail_skus:
+            # Track whether any per-source fallback occurred
+            local_fallbacks = []
+
+            if '_orders_original' in locals() and orders_unified_df.empty and len(_orders_original) > 0:
+                logs_orders.append("WARNING: RETAIL-only filtering removed all rows from orders; restoring full ORDERS dataset for analysis.")
+                orders_unified_df = _orders_original
+                local_fallbacks.append('orders')
+
+            if '_deliveries_original' in locals() and deliveries_unified_df.empty and len(_deliveries_original) > 0:
+                logs_deliveries.append("WARNING: RETAIL-only filtering removed all rows from deliveries; restoring full DELIVERIES dataset for analysis.")
+                deliveries_unified_df = _deliveries_original
+                local_fallbacks.append('deliveries')
+
+            if '_inventory_original' in locals() and inventory_data_df.empty and len(_inventory_original) > 0:
+                logs_inventory.append("WARNING: RETAIL-only filtering removed all rows from inventory; restoring full INVENTORY dataset for analysis.")
+                inventory_data_df = _inventory_original
+                local_fallbacks.append('inventory')
+
+            # Also restore vendor_pos/inbound if they were filtered to empty
+            if '_vendor_pos_original' in locals() and vendor_pos_df.empty and len(_vendor_pos_original) > 0:
+                logs_vendor_pos.append("WARNING: RETAIL-only filtering removed all rows from vendor POs; restoring full Vendor PO dataset.")
+                vendor_pos_df = _vendor_pos_original
+                local_fallbacks.append('vendor_pos')
+
+            if '_inbound_original' in locals() and inbound_df.empty and len(_inbound_original) > 0:
+                logs_inbound.append("WARNING: RETAIL-only filtering removed all rows from inbound receipts; restoring full inbound dataset.")
+                inbound_df = _inbound_original
+                local_fallbacks.append('inbound')
+
+            # If we restored at least one source, note that a fallback occurred;
+            # otherwise, if no originals available but datasets are empty, warn and disable retail mode.
+            if local_fallbacks:
+                # If any per-source fallbacks occurred we consider that a fallback scenario and
+                # do not consider retail mode 'applied' globally (keeps behavior consistent)
+                retail_mode_fallbacked = True
+                retail_mode_applied = False
+            else:
+                # fallback to full dataset if all were filtered away (previous behavior)
+                total_filtered_rows = sum([
+                    len(orders_unified_df) if 'orders_unified_df' in locals() else 0,
+                    len(deliveries_unified_df) if 'deliveries_unified_df' in locals() else 0,
+                    len(inventory_data_df) if 'inventory_data_df' in locals() else 0
+                ])
+                if total_filtered_rows == 0:
+                    logs_orders.append("WARNING: RETAIL-only filtering removed all rows in orders/deliveries/inventory — falling back to full dataset.")
+                    if '_orders_original' in locals():
+                        orders_unified_df = _orders_original
+                    if '_deliveries_original' in locals():
+                        deliveries_unified_df = _deliveries_original
+                    if '_inventory_original' in locals():
+                        inventory_data_df = _inventory_original
+                    if '_vendor_pos_original' in locals():
+                        vendor_pos_df = _vendor_pos_original
+                    if '_inbound_original' in locals():
+                        inbound_df = _inbound_original
+                    retail_mode_fallbacked = True
+                    retail_mode_applied = False
+                else:
+                    retail_mode_applied = True
 
         # Calculate vendor performance (91%)
         update_progress(0.91, "Calculating vendor performance...")
@@ -209,13 +320,11 @@ def load_all_data(_progress_callback=None):
         update_progress(0.97, "Calculating backorder relief dates...")
         logs_relief, backorder_relief_df = load_backorder_relief(backorder_data_df, vendor_pos_df, vendor_performance_df)
 
-        # Generate demand forecasts (99%)
-        update_progress(0.99, "Generating demand forecasts...")
-        logs_demand, demand_forecast_df, demand_accuracy_df, daily_demand_df = generate_demand_forecast(
-            deliveries_unified_df,
-            master_data_df=master_data_df,
-            forecast_horizon_days=90
-        )
+        # -- LAZY DEMAND FORECASTING --
+        # Demand forecasting is expensive and used less frequently. We defer running
+        # `generate_demand_forecast` until the user explicitly opens the Demand page.
+        # Here we return empty dataframes/placeholders that will be filled on demand.
+        logs_demand, demand_forecast_df, demand_accuracy_df, daily_demand_df = [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         # Create SKU description lookup (99.5%)
         update_progress(0.995, "Building SKU description lookup...")
@@ -291,12 +400,28 @@ def load_all_data(_progress_callback=None):
             'vendor_discount_summary_df': vendor_discount_summary_df,
             'demand_forecast_df': demand_forecast_df,
             'demand_accuracy_df': demand_accuracy_df,
+            'retail_mode_applied': retail_mode_applied,
+            'retail_mode_fallbacked': retail_mode_fallbacked,
+            'retail_sku_count': retail_sku_count,
         }
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
         import traceback
         st.error(traceback.format_exc())
         return None
+
+
+def compute_forecast_wrapper(deliveries_df, master_df, horizon_days=90, ts_mode='Daily'):
+    """Module-level helper that maps UI time-series selection to the forecasting API.
+
+    Kept at module-level so tests and the UI can call the same mapping logic.
+    """
+    if ts_mode == 'Daily' or str(ts_mode).lower() == 'daily':
+        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='daily', rolling_months=None)
+    if ts_mode == 'Monthly' or str(ts_mode).lower() == 'monthly':
+        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=None)
+    # Any other value -> treat as rolling 12 months monthly by default
+    return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=12)
 
 # ===== MAIN APPLICATION =====
 
@@ -309,43 +434,79 @@ def main():
     st.sidebar.divider()
 
     # ===== SIDEBAR: NAVIGATION =====
-    st.sidebar.header("📍 Navigation")
+    # Organized into clear hierarchy: Primary (daily) → Secondary (weekly) → Tools (as-needed)
 
-    # Organize pages into logical groups
-    core_pages = {
+    # PRIMARY PAGES - Daily operational use
+    st.sidebar.markdown("**📍 Daily Operations**")
+    primary_pages = {
         "📊 Overview": "overview",
         "🚚 Service Level": "service_level",
         "⚠️ Backorders": "backorders",
-        "📦 Inventory": "inventory",
+        "📦 Inventory": "inventory"
+    }
+
+    # SECONDARY PAGES - Weekly/planning use
+    secondary_pages = {
         "🏭 Vendor & Procurement": "vendor",
-        "📈 Demand Forecasting": "demand",
-        "🔄 SKU Mapping": "sku_mapping"
+        "📈 Demand Forecasting": "demand"
     }
 
-    future_pages = {
-        "📊 Old Forecasting": "forecasting",
-        "🚛 Inbound Logistics": "inbound"
+    # TOOLS - As-needed utilities
+    tool_pages = {
+        "🔄 SKU Mapping": "sku_mapping",
+        "📤 Data Management": "data_upload"
     }
 
-    utility_pages = {
-        "📤 Data Management": "data_upload",
-        "🔧 Debug & Logs": "debug"
-    }
+    # Build navigation with visual grouping
+    selected_page = None
 
-    # Combine all pages for selectbox
-    all_pages = {**core_pages, **future_pages, **utility_pages}
-
-    selected_label = st.sidebar.selectbox(
+    # Primary pages as radio buttons (most used)
+    primary_selection = st.sidebar.radio(
         "Select Page",
-        options=list(all_pages.keys()),
-        help="Navigate between different supply chain modules",
-        label_visibility="collapsed"
+        options=list(primary_pages.keys()),
+        label_visibility="collapsed",
+        key="primary_nav"
     )
-    selected_page = all_pages[selected_label]
+    if primary_selection:
+        selected_page = primary_pages[primary_selection]
+
+    # Secondary pages in expander
+    st.sidebar.markdown("**📅 Planning & Analysis**")
+    secondary_selection = st.sidebar.radio(
+        "Planning",
+        options=list(secondary_pages.keys()),
+        label_visibility="collapsed",
+        key="secondary_nav",
+        index=None  # No default selection
+    )
+    if secondary_selection:
+        selected_page = secondary_pages[secondary_selection]
+
+    # Tools in expander (collapsed by default)
+    with st.sidebar.expander("🔧 Tools & Settings", expanded=False):
+        tool_selection = st.sidebar.radio(
+            "Tools",
+            options=list(tool_pages.keys()),
+            label_visibility="collapsed",
+            key="tool_nav",
+            index=None
+        )
+        if tool_selection:
+            selected_page = tool_pages[tool_selection]
+
+        # Debug link (hidden in tools)
+        if st.sidebar.checkbox("Show Debug", value=False, key="show_debug"):
+            selected_page = "debug"
+
+    # Default to overview if nothing selected
+    if selected_page is None:
+        selected_page = "overview"
 
     st.sidebar.divider()
 
-    # ===== SIDEBAR: DATA LOADING =====
+    # ===== SIDEBAR: GLOBAL SETTINGS =====
+    st.sidebar.markdown("**⚙️ Data Settings**")
+
     # Load data with progress indicator
     progress_bar = st.sidebar.progress(0)
     progress_text = st.sidebar.empty()
@@ -355,7 +516,59 @@ def main():
         progress_bar.progress(progress)
         progress_text.text(message)
 
-    data = load_all_data(_progress_callback=update_loading_progress)
+    # Sidebar toggle: restrict data to RETAIL PERMANENT SKUs (95% common case) to reduce load time
+    retail_only = st.sidebar.checkbox(
+        "RETAIL PERMANENT only",
+        value=True,
+        help="Load only RETAIL PERMANENT SKUs (faster). Uncheck for full dataset."
+    )
+
+    # Time period - simplified
+    use_rolling_12 = st.sidebar.checkbox(
+        "Rolling 12 Months",
+        value=True,
+        help="Show last 12 months. Uncheck to select a specific year."
+    )
+
+    # Year selector - only show when Rolling 12 Months is NOT selected
+    current_year = datetime.now().year
+    if not use_rolling_12:
+        year_options = [str(y) for y in range(current_year - 2, current_year + 1)]
+        selected_year = st.sidebar.selectbox(
+            "Year",
+            options=year_options,
+            index=len(year_options) - 1,
+            help="Filter to specific calendar year"
+        )
+    else:
+        selected_year = str(current_year)
+
+    # Determine time_series_mode based on selections
+    if use_rolling_12:
+        time_series_mode = 'Rolling 12 months (monthly)'
+    else:
+        time_series_mode = 'Monthly'
+
+    # Store selected year in session state for use by pages
+    st.session_state['selected_year'] = int(selected_year)
+    st.session_state['use_rolling_12'] = use_rolling_12
+
+    # Cached, on-demand forecast computation used by the Demand page and for pre-warming
+    @st.cache_data(ttl=3600, show_spinner="Computing demand forecasts...")
+    def _compute_demand_forecast(deliveries_df, master_df, horizon_days=90, ts_mode='daily'):
+        try:
+            # Convert selection to arguments for forecasting function
+            return compute_forecast_wrapper(deliveries_df, master_df, horizon_days, ts_mode=ts_mode)
+        except Exception as e:
+            # Ensure the cached function always returns the same shape
+            return [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # If retail_only mode is active we show a persistent banner explaining scope of results
+    if retail_only:
+        st.sidebar.markdown("---")
+        st.sidebar.info("RETAIL PERMANENT mode is ON — the dashboard is loading and showing only SKUs classified as **RETAIL PERMANENT**. Toggle off to view the full dataset.")
+
+    data = load_all_data(_progress_callback=update_loading_progress, retail_only=retail_only)
 
     # Clear progress indicators
     progress_bar.empty()
@@ -364,6 +577,10 @@ def main():
     if data is None:
         st.error("Failed to load data. Please check your data files.")
         st.stop()
+
+    # If load_all_data reported the retail filter was fallbacked, surface a clear warning
+    if data.get('retail_mode_fallbacked'):
+        st.warning("RETAIL-only filter did not match any rows in your data and was automatically disabled. The dashboard is showing the full dataset.")
 
     # ===== SIDEBAR: SYSTEM STATUS =====
     st.sidebar.header("📊 System Status")
@@ -393,6 +610,49 @@ def main():
     if st.sidebar.button("🔄 Refresh Data", width='stretch', help="Clear cache and reload all data from source files"):
         st.cache_data.clear()
         st.rerun()
+
+    # Precompute retail forecasts (warm cache) - only shown when retail_only mode is used
+    if retail_only:
+        if st.sidebar.button("⚡ Precompute Retail Forecasts (warm cache)", help="Prime the demand forecast cache for RETAIL PERMANENT SKUs"):
+            # Gather input data
+            master_df = data.get('master_df', pd.DataFrame())
+            deliveries_df = data.get('deliveries', pd.DataFrame())
+
+            # Identify retail SKUs (normalize SKUs for robust matching)
+            retail_skus = set()
+            if not master_df.empty and 'category' in master_df.columns:
+                retail_mask = master_df['category'].astype(str).str.strip().str.upper() == 'RETAIL PERMANENT'
+                if retail_mask.any():
+                    retail_skus = set(master_df.loc[retail_mask, 'sku'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True).str.upper().tolist())
+
+            if deliveries_df.empty or len(retail_skus) == 0:
+                st.sidebar.warning("No deliveries or no RETAIL PERMANENT SKUs found to precompute.")
+            else:
+                # Filter deliveries to the retail SKUs
+                dlv_norm = deliveries_df['Item - SAP Model Code'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True).str.upper()
+                dlv = deliveries_df[dlv_norm.isin(list(retail_skus))].copy()
+                # Convert columns to expected names for the forecast function
+                dlv = dlv.rename(columns={
+                    'Item - SAP Model Code': 'sku',
+                    'Delivery Creation Date: Date': 'ship_date',
+                    'Goods Issue Date: Date': 'ship_date',
+                    'Deliveries - TOTAL Goods Issue Qty': 'units_issued'
+                })
+
+                # Filter master to retail skus
+                mdf = master_df[master_df['sku'].isin(list(retail_skus))].copy()
+
+                start_time = datetime.now()
+                with st.sidebar.spinner('Precomputing retail forecasts (this may take a while)...'):
+                    logs_p, f_df, acc_df, daily_df = _compute_demand_forecast(dlv, mdf, 90, ts_mode=time_series_mode)
+                elapsed = (datetime.now() - start_time).total_seconds()
+
+                if isinstance(f_df, pd.DataFrame) and not f_df.empty:
+                    st.sidebar.success(f"Retail forecasts computed & cached for {len(f_df)} SKUs in {elapsed:.1f}s")
+                    # Store into session_state for quick access if required
+                    st.session_state['retail_forecast_cached'] = (logs_p, f_df, acc_df, daily_df)
+                else:
+                    st.sidebar.error("Retail precompute completed but no forecast rows were produced.")
 
     # Display dashboard time in EST
     est = pytz.timezone('US/Eastern')
@@ -434,25 +694,27 @@ def main():
         )
 
     elif selected_page == "demand":
-        show_demand_page(
-            deliveries_df=data['deliveries'],
-            demand_forecast_df=data['demand_forecast'],
-            forecast_accuracy_df=data['demand_accuracy'],
-            master_data_df=data.get('master_df', pd.DataFrame()),
-            daily_demand_df=data.get('daily_demand', pd.DataFrame())
+        # Lazily compute or fetch cached demand forecast data only when user navigates to this page
+        @st.cache_data(ttl=3600, show_spinner="Computing demand forecasts...")
+        def _compute_demand_forecast(deliveries_df, master_df, horizon_days=90, ts_mode='daily'):
+            try:
+                return compute_forecast_wrapper(deliveries_df, master_df, horizon_days, ts_mode=ts_mode)
+            except Exception as e:
+                st.error(f"Error computing demand forecast: {e}")
+                return [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+        # Compute on demand (will use cache if run within TTL)
+        logs_demand, demand_forecast_df, demand_accuracy_df, daily_demand_df = _compute_demand_forecast(
+            data['deliveries'], data.get('master_df', pd.DataFrame()), 90, ts_mode=time_series_mode
         )
 
-    elif selected_page == "forecasting":
-        # Forecasting features have been consolidated into the Demand page
-        st.info("📊 Demand Forecasting features have been moved to the 'Demand Forecasting' page.")
-        st.markdown("Please use the **Demand Forecasting** page from the sidebar for:")
-        st.markdown("- Historical demand analysis and forecasting")
-        st.markdown("- Time-series visualizations")
-        st.markdown("- Forecast accuracy tracking")
-        st.markdown("- Forecast vs actual comparisons")
-
-    elif selected_page == "inbound":
-        render_inbound_page(inbound_data=None)
+        show_demand_page(
+            deliveries_df=data['deliveries'],
+            demand_forecast_df=demand_forecast_df,
+            forecast_accuracy_df=demand_accuracy_df,
+            master_data_df=data.get('master_df', pd.DataFrame()),
+            daily_demand_df=daily_demand_df
+        )
 
     elif selected_page == "data_upload":
         render_data_upload_page()

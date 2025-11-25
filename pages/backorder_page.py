@@ -1961,70 +1961,55 @@ def render_backorder_page(backorder_data, backorder_relief_data=None, stockout_r
 
     st.divider()
 
-    # Tabbed Interface
-    tabs_list = [
-        "📊 Overview & Analysis",
-        "🚨 Critical Backorders",
-        "📋 All Backorders",
-        "📈 Summaries",
-        "🔄 Fulfillment Opportunities"
-    ]
+    # === SIMPLIFIED 3-TAB INTERFACE ===
+    # Tab 1: Overview & Actions (combines Overview + Critical)
+    # Tab 2: Risk & Relief (combines Stockout Risk + Relief Timeline)
+    # Tab 3: Details & Fulfillment (combines All Backorders + Summaries + Fulfillment)
 
-    # Add Relief Timeline tab if relief data is available
-    has_relief_tab = backorder_relief_data is not None and not backorder_relief_data.empty
-    has_stockout_tab = stockout_risk_data is not None and not stockout_risk_data.empty
+    has_relief_data = backorder_relief_data is not None and not backorder_relief_data.empty
+    has_stockout_data = stockout_risk_data is not None and not stockout_risk_data.empty
 
-    if has_relief_tab:
-        tabs_list.insert(1, "📅 Relief Timeline & PO Tracking")
-    if has_stockout_tab:
-        # Insert stockout tab after relief tab (if exists) or after overview
-        insert_pos = 2 if has_relief_tab else 1
-        tabs_list.insert(insert_pos, "⚠️ At-Risk Stockout Prediction")
-
-    # Create tabs based on how many we have
-    if has_relief_tab and has_stockout_tab:
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(tabs_list)
-    elif has_relief_tab or has_stockout_tab:
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(tabs_list)
-    else:
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
-
-    # Render tabs dynamically based on available data
-    tab_idx = 0
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Overview & Actions",
+        "⚠️ Risk Analysis",
+        "📋 Details & Fulfillment"
+    ])
 
     with tab1:
+        # Combined Overview + Critical Backorders
         render_overview_analysis_tab(filtered_data)
-        tab_idx += 1
 
-    # Relief Timeline tab (conditional)
-    if has_relief_tab:
-        with eval(f"tab{tab_idx + 1}"):
+        st.divider()
+        st.subheader("🚨 Critical Items Requiring Action")
+        render_critical_backorders_tab(filtered_data)
+
+    with tab2:
+        # Combined Risk Analysis view
+        if has_stockout_data:
+            render_stockout_risk_tab(stockout_risk_data)
+            st.divider()
+
+        if has_relief_data:
             # Apply same filters to relief data
             if 'sku' in filter_values and filter_values['sku']:
                 filtered_relief_data = backorder_relief_data[backorder_relief_data['sku'].isin(filter_values['sku'])]
             else:
                 filtered_relief_data = backorder_relief_data.copy()
             render_relief_timeline_tab(filtered_relief_data, relief_metrics)
-        tab_idx += 1
 
-    # Stockout Risk tab (conditional)
-    if has_stockout_tab:
-        with eval(f"tab{tab_idx + 1}"):
-            render_stockout_risk_tab(stockout_risk_data)
-        tab_idx += 1
+        if not has_stockout_data and not has_relief_data:
+            st.info("No risk analysis data available. Risk predictions require inventory and PO data.")
 
-    # Remaining tabs (always present)
-    with eval(f"tab{tab_idx + 1}"):
-        render_critical_backorders_tab(filtered_data)
-        tab_idx += 1
+    with tab3:
+        # Combined Details view with sections
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.subheader("📈 Summary by Customer & SKU")
+            render_summaries_tab(filtered_data)
+        with col2:
+            st.subheader("🔄 Fulfillment Opportunities")
+            render_fulfillment_opportunities_tab(filtered_data, inventory_data)
 
-    with eval(f"tab{tab_idx + 1}"):
+        st.divider()
+        st.subheader("📋 All Backorder Records")
         render_all_backorders_tab(filtered_data)
-        tab_idx += 1
-
-    with eval(f"tab{tab_idx + 1}"):
-        render_summaries_tab(filtered_data)
-        tab_idx += 1
-
-    with eval(f"tab{tab_idx + 1}"):
-        render_fulfillment_opportunities_tab(filtered_data, inventory_data)

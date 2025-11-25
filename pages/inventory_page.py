@@ -1987,28 +1987,38 @@ def render_inventory_page(inventory_data):
 
     st.divider()
 
-    # Tabbed Interface
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Overview & Health",
-        "⚠️ Alerts & Risks",
-        "💡 Scrap Opportunities",
-        "🐌 Slow Movers",
+    # === SIMPLIFIED 3-TAB INTERFACE ===
+    # Tab 1: Health Dashboard (Overview + Alerts combined)
+    # Tab 2: Action Items (Scrap + Slow Movers combined)
+    # Tab 3: Detailed Records
+
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Health Dashboard",
+        "⚠️ Action Items",
         "📋 Detailed Records"
     ])
 
     with tab1:
+        # Combined Overview + Alerts
         render_overview_health_tab(filtered_data, currency, settings)
 
-    with tab2:
+        st.divider()
+        st.subheader("🚨 Inventory Alerts")
         render_alerts_risks_tab(filtered_data, currency)
 
-    with tab3:
+    with tab2:
+        # Combined Action Items: Scrap + Slow Movers side by side
+        st.subheader("💡 Scrap Opportunities")
+        st.caption("Items exceeding scrap threshold - potential write-off candidates")
         render_scrap_opportunities_tab(filtered_data, currency, scrap_threshold)
 
-    with tab4:
+        st.divider()
+
+        st.subheader("🐌 Slow-Moving Inventory")
+        st.caption("Low velocity items requiring markdown or liquidation review")
         render_slow_movers_tab(filtered_data, currency)
 
-    with tab5:
+    with tab3:
         render_detailed_records_tab(filtered_data, currency)
 
     # === DATA FRESHNESS FOOTER ===
