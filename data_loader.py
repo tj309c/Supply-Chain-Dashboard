@@ -1391,6 +1391,111 @@ def load_vendor_pos(po_path, file_key='vendor_pos'):
     return logs, df
 
 
+@st.cache_data(ttl=3600, show_spinner="Loading ATL fulfillment data...")
+def load_atl_fulfillment(atl_path, master_df=None, file_key='atl_fulfillment'):
+    """
+    Load ATL Fulfillment data for international supplier shipments.
+
+    Args:
+        atl_path: Path to ATL_FULLFILLMENT.csv
+        master_df: Optional Master Data dataframe to look up vendor names
+        file_key: Session state key for uploaded file
+
+    Returns: logs (list), dataframe with open shipments
+    """
+    logs = []
+    start_time = time.time()
+    logs.append("--- ATL Fulfillment Loader ---")
+
+    # Define column mapping
+    atl_cols = {
+        "SAP Item Material Code": "sku",
+        "TOTAL Good Issue Qty": "open_qty",
+        "TGT Delivery Date DC": "expected_delivery_date",
+        "ON TIME TRANSIT": "status"
+    }
+
+    try:
+        # ATL file uses latin-1 encoding due to special characters
+        df = safe_read_csv(file_key, atl_path, usecols=list(atl_cols.keys()),
+                          low_memory=False, encoding='latin-1')
+        logs.append(f"INFO: Found and loaded {len(df)} rows from ATL_FULLFILLMENT.csv.")
+    except Exception as e:
+        logs.append(f"ERROR: Failed to read 'ATL_FULLFILLMENT.csv'. Error: {e}")
+        return logs, pd.DataFrame()
+
+    if not check_columns(df, atl_cols.keys(), "ATL_FULLFILLMENT.csv", logs):
+        return logs, pd.DataFrame()
+
+    # Rename columns
+    df = df.rename(columns=atl_cols)
+
+    # Clean SKU column
+    df['sku'] = clean_string_column(df['sku'])
+
+    # Clean status column
+    df['status'] = df['status'].astype(str).str.strip().str.upper()
+
+    # Parse expected delivery date (DD/MM/YYYY format)
+    df['expected_delivery_date'] = pd.to_datetime(
+        df['expected_delivery_date'],
+        format='%d/%m/%Y',
+        errors='coerce'
+    )
+
+    # Convert quantity to numeric
+    df['open_qty'] = safe_numeric_column(df['open_qty'], remove_commas=True)
+
+    # Filter for OPEN shipments only:
+    # - Status is NOT 'DELIVERED'
+    # - Quantity > 0
+    initial_count = len(df)
+    df = df[
+        (df['status'] != 'DELIVERED') &
+        (df['open_qty'] > 0)
+    ].copy()
+    filtered_count = len(df)
+    logs.append(f"INFO: Filtered to {filtered_count} open shipments (excluded {initial_count - filtered_count} delivered/zero-qty rows).")
+
+    # Look up vendor from Master Data if provided
+    if master_df is not None and not master_df.empty and 'sku' in master_df.columns:
+        # Get vendor mapping from master data
+        if 'vendor_name' in master_df.columns:
+            vendor_map = master_df[['sku', 'vendor_name']].drop_duplicates('sku').set_index('sku')['vendor_name']
+            df['vendor_name'] = df['sku'].map(vendor_map).fillna('Unknown Vendor')
+            logs.append(f"INFO: Mapped {(df['vendor_name'] != 'Unknown Vendor').sum()} SKUs to vendors from Master Data.")
+        else:
+            df['vendor_name'] = 'International Supplier'
+    else:
+        df['vendor_name'] = 'International Supplier'
+
+    # Add source identifier
+    df['source'] = 'ATL_FULFILLMENT'
+
+    # Calculate days until expected delivery
+    today = pd.Timestamp.now()
+    df['days_until_delivery'] = (df['expected_delivery_date'] - today).dt.days
+
+    # Aggregate by SKU for total open quantities
+    df_agg = df.groupby('sku').agg({
+        'open_qty': 'sum',
+        'expected_delivery_date': 'min',  # Earliest expected delivery
+        'vendor_name': 'first',
+        'status': lambda x: ', '.join(x.unique()),
+        'days_until_delivery': 'min',
+        'source': 'first'
+    }).reset_index()
+
+    logs.append(f"INFO: Aggregated to {len(df_agg)} unique SKUs with open international shipments.")
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    logs.append(f"INFO: ATL Fulfillment Loader finished in {total_time:.2f} seconds.")
+    logs.append(f"INFO: Total open quantity: {df_agg['open_qty'].sum():,.0f} units across {len(df_agg)} SKUs.")
+
+    return logs, df_agg
+
+
 @st.cache_data(ttl=3600, show_spinner="Loading inbound receipts...")
 def load_inbound_data(inbound_path, file_key='inbound'):
     """

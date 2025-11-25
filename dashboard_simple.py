@@ -28,6 +28,7 @@ from data_loader import (
     load_backorder_relief,
     load_stockout_prediction,
     create_sku_description_lookup,
+    load_atl_fulfillment,
 )
 
 # Import pricing analysis
@@ -52,6 +53,7 @@ from pages.data_upload_page import render_data_upload_page
 from pages.inbound_page import render_inbound_page
 from pages.debug_page import render_debug_page
 from pages.demand_page import show_demand_page
+from pages.replenishment_page import render_replenishment_page
 
 # ===== PAGE CONFIGURATION =====
 st.set_page_config(
@@ -129,6 +131,7 @@ def load_all_data(_progress_callback=None, retail_only=True):
         INVENTORY_PATH = "INVENTORY.csv"
         VENDOR_POS_PATH = "Domestic Vendor POs.csv"
         INBOUND_PATH = "DOMESTIC INBOUND.csv"
+        ATL_FULFILLMENT_PATH = "ATL_FULLFILLMENT.csv"
 
         # Load master data (10%)
         update_progress(0.10, "Loading master data...")
@@ -229,6 +232,23 @@ def load_all_data(_progress_callback=None, retail_only=True):
                 _inbound_original = inbound_df
                 inbound_norm = _normalize_skus(inbound_df['sku'])
                 inbound_df = inbound_df[inbound_norm.isin(retail_skus)]
+
+        # Load ATL fulfillment data for international shipments (90%)
+        update_progress(0.90, "Loading international shipments...")
+        try:
+            logs_atl, atl_fulfillment_df = load_atl_fulfillment(
+                ATL_FULFILLMENT_PATH,
+                master_df=master_data_df,
+                file_key='atl_fulfillment'
+            )
+            if retail_only and retail_skus:
+                if 'sku' in atl_fulfillment_df.columns:
+                    _atl_original = atl_fulfillment_df
+                    atl_norm = _normalize_skus(atl_fulfillment_df['sku'])
+                    atl_fulfillment_df = atl_fulfillment_df[atl_norm.isin(retail_skus)]
+        except Exception as e:
+            logs_atl = [f"WARNING: Could not load ATL_FULLFILLMENT.csv: {e}"]
+            atl_fulfillment_df = pd.DataFrame()
 
         # If retail_only filtering removed rows from one or more primary sources,
         # restore each affected source individually (falls back to original copy where available).
@@ -349,6 +369,7 @@ def load_all_data(_progress_callback=None, retail_only=True):
             'inventory_analysis': inventory_analysis_df,
             'stockout_risk': stockout_risk_df,
             'vendor_pos': vendor_pos_df,
+            'atl_fulfillment': atl_fulfillment_df,
             'inbound': inbound_df,
             'vendor_performance': vendor_performance_df,
             'pricing_analysis': pricing_analysis_df,
@@ -420,6 +441,9 @@ def compute_forecast_wrapper(deliveries_df, master_df, horizon_days=90, ts_mode=
         return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='daily', rolling_months=None)
     if ts_mode == 'Monthly' or str(ts_mode).lower() == 'monthly':
         return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=None)
+    # Handle 30-month rolling window for demand forecasting
+    if 'rolling 30' in str(ts_mode).lower() or ts_mode == 'Rolling 30 months (monthly)':
+        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=30)
     # Any other value -> treat as rolling 12 months monthly by default
     return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=12)
 
@@ -434,73 +458,47 @@ def main():
     st.sidebar.divider()
 
     # ===== SIDEBAR: NAVIGATION =====
-    # Organized into clear hierarchy: Primary (daily) → Secondary (weekly) → Tools (as-needed)
+    # Single selectbox for clean, unified page selection
 
-    # PRIMARY PAGES - Daily operational use
-    st.sidebar.markdown("**📍 Daily Operations**")
-    primary_pages = {
+    # All navigable pages in a flat list
+    page_options = [
+        "📊 Overview",
+        "🚚 Service Level",
+        "⚠️ Backorders",
+        "📦 Inventory",
+        "🏭 Vendor & Procurement",
+        "📈 Demand Forecasting",
+        "📋 Replenishment Planning",
+        "🔄 SKU Mapping",
+        "📤 Data Management"
+    ]
+
+    # Map display names to page keys
+    page_map = {
         "📊 Overview": "overview",
         "🚚 Service Level": "service_level",
         "⚠️ Backorders": "backorders",
-        "📦 Inventory": "inventory"
-    }
-
-    # SECONDARY PAGES - Weekly/planning use
-    secondary_pages = {
+        "📦 Inventory": "inventory",
         "🏭 Vendor & Procurement": "vendor",
-        "📈 Demand Forecasting": "demand"
-    }
-
-    # TOOLS - As-needed utilities
-    tool_pages = {
+        "📈 Demand Forecasting": "demand",
+        "📋 Replenishment Planning": "replenishment",
         "🔄 SKU Mapping": "sku_mapping",
         "📤 Data Management": "data_upload"
     }
 
-    # Build navigation with visual grouping
-    selected_page = None
-
-    # Primary pages as radio buttons (most used)
-    primary_selection = st.sidebar.radio(
-        "Select Page",
-        options=list(primary_pages.keys()),
-        label_visibility="collapsed",
-        key="primary_nav"
+    # Single selectbox for page navigation
+    selected_label = st.sidebar.selectbox(
+        "Navigate to",
+        options=page_options,
+        index=0,  # Default to Overview
+        key="main_nav"
     )
-    if primary_selection:
-        selected_page = primary_pages[primary_selection]
 
-    # Secondary pages in expander
-    st.sidebar.markdown("**📅 Planning & Analysis**")
-    secondary_selection = st.sidebar.radio(
-        "Planning",
-        options=list(secondary_pages.keys()),
-        label_visibility="collapsed",
-        key="secondary_nav",
-        index=None  # No default selection
-    )
-    if secondary_selection:
-        selected_page = secondary_pages[secondary_selection]
+    selected_page = page_map.get(selected_label, "overview")
 
-    # Tools in expander (collapsed by default)
-    with st.sidebar.expander("🔧 Tools & Settings", expanded=False):
-        tool_selection = st.sidebar.radio(
-            "Tools",
-            options=list(tool_pages.keys()),
-            label_visibility="collapsed",
-            key="tool_nav",
-            index=None
-        )
-        if tool_selection:
-            selected_page = tool_pages[tool_selection]
-
-        # Debug link (hidden in tools)
-        if st.sidebar.checkbox("Show Debug", value=False, key="show_debug"):
-            selected_page = "debug"
-
-    # Default to overview if nothing selected
-    if selected_page is None:
-        selected_page = "overview"
+    # Debug option (separate checkbox)
+    if st.sidebar.checkbox("🔧 Debug Mode", value=False, key="show_debug"):
+        selected_page = "debug"
 
     st.sidebar.divider()
 
@@ -703,9 +701,14 @@ def main():
                 st.error(f"Error computing demand forecast: {e}")
                 return [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+        # For demand forecasting, always use 30 months of data for better forecast accuracy
+        # (more historical data = better moving averages and trend analysis)
+        demand_ts_mode = 'Rolling 30 months (monthly)'
+        st.info("📊 **Demand Forecasting uses 30 months of historical data** for more accurate forecasts (overrides the sidebar filter).")
+
         # Compute on demand (will use cache if run within TTL)
         logs_demand, demand_forecast_df, demand_accuracy_df, daily_demand_df = _compute_demand_forecast(
-            data['deliveries'], data.get('master_df', pd.DataFrame()), 90, ts_mode=time_series_mode
+            data['deliveries'], data.get('master_df', pd.DataFrame()), 90, ts_mode=demand_ts_mode
         )
 
         show_demand_page(
@@ -714,6 +717,31 @@ def main():
             forecast_accuracy_df=demand_accuracy_df,
             master_data_df=data.get('master_df', pd.DataFrame()),
             daily_demand_df=daily_demand_df
+        )
+
+    elif selected_page == "replenishment":
+        # Replenishment planning needs demand forecast data
+        # Compute demand forecast if not already available
+        @st.cache_data(ttl=3600, show_spinner="Computing demand forecasts for replenishment...")
+        def _compute_demand_for_replenishment(deliveries_df, master_df, horizon_days=90):
+            try:
+                return compute_forecast_wrapper(deliveries_df, master_df, horizon_days, ts_mode='Rolling 30 months (monthly)')
+            except Exception as e:
+                st.warning(f"Could not compute demand forecast: {e}")
+                return [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+        # Get demand forecast (use cached if available)
+        _, demand_forecast_df, _, _ = _compute_demand_for_replenishment(
+            data['deliveries'], data.get('master_df', pd.DataFrame()), 90
+        )
+
+        render_replenishment_page(
+            inventory_data=data['inventory_analysis'],
+            demand_forecast_data=demand_forecast_df,
+            backorder_data=data['backorder'],
+            vendor_pos_data=data['vendor_pos'],
+            atl_fulfillment_data=data.get('atl_fulfillment', pd.DataFrame()),
+            master_data=data.get('master_df', pd.DataFrame())
         )
 
     elif selected_page == "data_upload":
