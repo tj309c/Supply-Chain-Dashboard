@@ -49,8 +49,11 @@ def process_deliveries_data(deliveries_df):
         return deliveries_df
 
     # Unified format - need to process
-    # Rename columns from unified format
-    required_cols = ["Item - SAP Model Code", "Delivery Creation Date: Date", "Deliveries - TOTAL Goods Issue Qty"]
+    # Choose which date column to use: prefer 'Goods Issue Date: Date' but fall back to 'Delivery Creation Date: Date'
+    date_col = 'Goods Issue Date: Date' if 'Goods Issue Date: Date' in deliveries_df.columns else 'Delivery Creation Date: Date'
+
+    # Required columns (sku, chosen date, qty)
+    required_cols = ["Item - SAP Model Code", date_col, "Deliveries - TOTAL Goods Issue Qty"]
 
     # Check if we have the required columns
     if not all(col in deliveries_df.columns for col in required_cols):
@@ -67,7 +70,7 @@ def process_deliveries_data(deliveries_df):
     # Rename columns
     processed = processed.rename(columns={
         "Item - SAP Model Code": "sku",
-        "Delivery Creation Date: Date": "ship_date",
+        date_col: "ship_date",
         "Deliveries - TOTAL Goods Issue Qty": "units_issued",
         "Customer Name - SHIP TO": "customer_name"
     })
@@ -595,6 +598,117 @@ def categorize_root_causes(backorder_data, backorder_relief_data=None, deliverie
     bo_data['root_cause'] = 'Unknown'
     bo_data['recommended_action'] = 'Review manually'
 
+    # New rule: If deliveries_data indicates the 'Goods Issue Date: Date' value is the sentinel
+    # (e.g., '1/1/2000') treat that as NULL (goods not yet issued) and consider this a Logistics Backorder.
+    # Default backorder stage is 'planning' unless flagged as logistics below.
+    bo_data['backorder_stage'] = 'planning'
+    try:
+        if deliveries_data is not None and not deliveries_data.empty:
+            # Determine available column names for matching
+            key_sales = None
+            if 'sales_order' in deliveries_data.columns:
+                key_sales = 'sales_order'
+            elif 'Deliveries Detail - Order Document Number' in deliveries_data.columns:
+                key_sales = 'Deliveries Detail - Order Document Number'
+
+            key_sku = None
+            if 'sku' in deliveries_data.columns:
+                key_sku = 'sku'
+            elif 'Item - SAP Model Code' in deliveries_data.columns:
+                key_sku = 'Item - SAP Model Code'
+
+            gid_col = None
+            if 'Goods Issue Date: Date' in deliveries_data.columns:
+                gid_col = 'Goods Issue Date: Date'
+
+            if key_sales and key_sku and gid_col:
+                # Find delivery rows that explicitly used the sentinel value
+                gid_vals = deliveries_data[[key_sales, key_sku, gid_col]].copy()
+                # Normalize sentinel detection (strip strings, match common sentinel formats)
+                gid_vals['gid_raw'] = gid_vals[gid_col].astype(str).str.strip()
+                sentinel_mask = gid_vals['gid_raw'].isin(['1/1/2000', '01/01/2000', '2000-01-01'])
+                # Also check for parsed datetime sentinel if any rows are already datetimes
+                try:
+                    parsed = pd.to_datetime(gid_vals[gid_col], errors='coerce')
+                    sentinel_mask = sentinel_mask | ((parsed.dt.year == 2000) & (parsed.dt.month == 1) & (parsed.dt.day == 1))
+                except Exception:
+                    pass
+
+                sentinel_rows = gid_vals.loc[sentinel_mask, [key_sales, key_sku]].drop_duplicates()
+
+                # Build set of keys to flag as logistics backorders
+                sentinel_set = set()
+                for _, r in sentinel_rows.iterrows():
+                    sentinel_set.add((str(r[key_sales]).strip(), str(r[key_sku]).strip()))
+
+                if sentinel_set:
+                    # Mark matching backorders as logistics stage and as a root cause
+                    match_mask = bo_data.apply(lambda r: (str(r.get('sales_order', '')).strip(), str(r.get('sku', '')).strip()) in sentinel_set, axis=1)
+                    if match_mask.any():
+                        bo_data.loc[match_mask, 'backorder_stage'] = 'logistics'
+                        bo_data.loc[match_mask, 'root_cause'] = 'Logistics Backorder'
+                        bo_data.loc[match_mask, 'recommended_action'] = 'Investigate logistics hold - goods not issued'
+    except Exception:
+        # Be defensive - if matching logic fails do not raise
+        pass
+
+    # If deliveries_data present, detect sentinel goods issue dates and mark logistics backorders
+    if deliveries_data is not None and not deliveries_data.empty:
+        try:
+            dlv = deliveries_data.copy()
+            # Ensure we have the expected columns and normalize names
+            rename_map = {
+                'Deliveries Detail - Order Document Number': 'sales_order',
+                'Item - SAP Model Code': 'sku',
+                'Goods Issue Date: Date': 'goods_issue_date_raw',
+                'Delivery Creation Date: Date': 'delivery_creation_date_raw'
+            }
+            available = [c for c in rename_map.keys() if c in dlv.columns]
+            if available:
+                dlv = dlv[[c for c in rename_map.keys() if c in dlv.columns]].rename(columns=rename_map)
+                # Parse dates to detect sentinel 1/1/2000
+                if 'goods_issue_date_raw' in dlv.columns:
+                    dlv['goods_issue_parsed'] = pd.to_datetime(dlv['goods_issue_date_raw'], format='%m/%d/%y', errors='coerce')
+                else:
+                    dlv['goods_issue_parsed'] = pd.NaT
+                if 'delivery_creation_date_raw' in dlv.columns:
+                    dlv['delivery_creation_parsed'] = pd.to_datetime(dlv['delivery_creation_date_raw'], format='%m/%d/%y', errors='coerce')
+                else:
+                    dlv['delivery_creation_parsed'] = pd.NaT
+
+                # Aggregate to one row per order-item
+                dlv_agg = dlv.groupby(['sales_order', 'sku'], observed=True).agg({
+                    'goods_issue_parsed': 'max',
+                    'delivery_creation_parsed': 'max'
+                }).reset_index()
+
+                # Detect sentinel which means 'no goods issue yet'. Support both parsed (00 two-digit) and raw "2000" forms.
+                sentinel_ts = pd.Timestamp(year=2000, month=1, day=1)
+                # If parsed exists and equals sentinel
+                parsed_sentinel = dlv_agg['goods_issue_parsed'].notna() & (dlv_agg['goods_issue_parsed'].dt.normalize() == sentinel_ts)
+                # Also check raw strings for patterns like '1/1/2000' (four-digit year)
+                # We need to inspect original raw series in the un-aggregated df
+                raw_series = dlv.loc[:, 'goods_issue_date_raw'] if 'goods_issue_date_raw' in dlv.columns else pd.Series(dtype=str)
+                raw_series = raw_series.fillna('').astype(str).str.strip()
+                raw_sentinel = raw_series.str.match(r'^(0?1)/(0?1)/(2000|00)$')
+                # Align raw_sentinel series to the aggregation by taking max (True if any row matches)
+                raw_agg = dlv[['sales_order', 'sku']].copy()
+                raw_agg['raw_sentinel'] = raw_sentinel.values
+                raw_agg = raw_agg.groupby(['sales_order', 'sku'], observed=True)['raw_sentinel'].max().reset_index()
+                dlv_agg = dlv_agg.merge(raw_agg, on=['sales_order', 'sku'], how='left')
+                dlv_agg['raw_sentinel'] = dlv_agg['raw_sentinel'].fillna(False)
+                dlv_agg['goods_issue_was_sentinel'] = parsed_sentinel | dlv_agg['raw_sentinel']
+
+                # Merge sentinel info into backorder data
+                bo_data = bo_data.merge(dlv_agg[['sales_order', 'sku', 'goods_issue_was_sentinel', 'delivery_creation_parsed']], on=['sales_order', 'sku'], how='left')
+                bo_data['goods_issue_was_sentinel'] = bo_data['goods_issue_was_sentinel'].fillna(False)
+                # Rename parsed delivery column for clarity
+                if 'delivery_creation_parsed' in bo_data.columns:
+                    bo_data = bo_data.rename(columns={'delivery_creation_parsed': 'matching_delivery_creation_date'})
+        except Exception:
+            # If anything goes wrong reading deliveries_data, ignore and continue
+            pass
+
     # If no relief data, default to insufficient PO coverage
     if backorder_relief_data is None or backorder_relief_data.empty:
         bo_data['root_cause'] = 'Insufficient PO Coverage'
@@ -607,6 +721,20 @@ def categorize_root_causes(backorder_data, backorder_relief_data=None, deliverie
     bo_data = bo_data.merge(relief_subset, on=['sales_order', 'sku'], how='left', suffixes=('', '_relief'))
 
     # CATEGORY 1: Insufficient PO Coverage
+    # If deliveries indicated the goods issue sentinel (1/1/2000), treat these as Logistics Backorders
+    if 'goods_issue_was_sentinel' in bo_data.columns and bo_data['goods_issue_was_sentinel'].any():
+        # Mark planning/logistics lateness relative to today
+        bo_data['is_planning_late_due_to_missing_goods_issue'] = (
+            bo_data['goods_issue_was_sentinel'] & (TODAY > (bo_data['order_date'] + pd.to_timedelta(7, unit='D')))
+        )
+        bo_data['is_logistics_late_due_to_missing_goods_issue'] = (
+            bo_data['goods_issue_was_sentinel'] & bo_data.get('matching_delivery_creation_date').notna() & (TODAY > (bo_data['matching_delivery_creation_date'] + pd.to_timedelta(3, unit='D')))
+        )
+        # Classify these as logistics backorders
+        logistic_mask = bo_data['goods_issue_was_sentinel']
+        bo_data.loc[logistic_mask, 'root_cause'] = 'Logistics Backorder'
+        bo_data.loc[logistic_mask, 'recommended_action'] = 'Investigate warehouse goods issue / escalate logistics'
+
     no_po_mask = (bo_data['has_po_coverage'].fillna(False) == False)
     bo_data.loc[no_po_mask, 'root_cause'] = 'Insufficient PO Coverage'
     bo_data.loc[no_po_mask, 'recommended_action'] = 'Create PO immediately'
@@ -1539,7 +1667,11 @@ def render_summaries_tab(filtered_data):
     }).reset_index().sort_values('backorder_qty', ascending=False)
 
     customer_summary.columns = ['Customer', 'Total Units', 'Order Count', 'Avg Age (days)']
-    customer_summary['Avg Age (days)'] = customer_summary['Avg Age (days)'].round(1)
+
+    # Apply professional formatting
+    customer_summary['Total Units'] = customer_summary['Total Units'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    customer_summary['Order Count'] = customer_summary['Order Count'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    customer_summary['Avg Age (days)'] = customer_summary['Avg Age (days)'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
 
     st.dataframe(customer_summary, width='stretch', hide_index=True)
 
@@ -1554,7 +1686,11 @@ def render_summaries_tab(filtered_data):
     }).reset_index().sort_values('backorder_qty', ascending=False)
 
     sku_summary.columns = ['SKU', 'Product Name', 'Total Units', 'Order Count', 'Avg Age (days)']
-    sku_summary['Avg Age (days)'] = sku_summary['Avg Age (days)'].round(1)
+
+    # Apply professional formatting
+    sku_summary['Total Units'] = sku_summary['Total Units'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    sku_summary['Order Count'] = sku_summary['Order Count'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    sku_summary['Avg Age (days)'] = sku_summary['Avg Age (days)'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
 
     st.dataframe(sku_summary, width='stretch', hide_index=True)
 
@@ -1684,92 +1820,113 @@ def render_backorder_page(backorder_data, backorder_relief_data=None, stockout_r
         from backorder_relief_analysis import get_relief_summary_metrics
         relief_metrics = get_relief_summary_metrics(backorder_relief_data)
 
-    # Display KPIs (shown at top level, above tabs)
-    kpi_data = {
-        "Total Orders": {
-            "value": f"{metrics['total_orders']:,}",
-            "delta": None,
-            "help": "**Business Logic:** Count of distinct sales orders with unfulfilled backorder quantity. Formula: COUNT(DISTINCT sales_order WHERE backorder_qty > 0)"
-        },
-        "Total Units": {
-            "value": f"{metrics['total_units']:,}",
-            "delta": None,
-            "help": "**Business Logic:** Sum of all backorder quantities across all open orders. Represents total units awaiting fulfillment. Formula: SUM(backorder_qty)"
-        },
-        "Unique SKUs": {
-            "value": f"{metrics['unique_skus']:,}",
-            "delta": None,
-            "help": "**Business Logic:** Count of distinct material numbers (SKUs) on backorder. Shows how many different products have unfulfilled demand. Formula: COUNT(DISTINCT sku WHERE backorder_qty > 0)"
-        },
-        "Unique Customers": {
-            "value": f"{metrics['unique_customers']:,}",
-            "delta": None,
-            "help": "**Business Logic:** Count of distinct customers with open backorders. Indicates breadth of backorder impact. Formula: COUNT(DISTINCT customer_name WHERE backorder_qty > 0)"
-        },
-        "Avg Age (days)": {
-            "value": f"{metrics['avg_age']:.1f}",
-            "delta": "⚠️" if metrics['avg_age'] > 30 else None,
-            "help": f"**Business Logic:** Average time backorders have been open. Days on Backorder = Today - Order Creation Date. Current average: {metrics['avg_age']:.1f} days. Formula: AVG(days_on_backorder) = AVG(TODAY - order_date)"
-        },
-        "Critical Orders": {
-            "value": f"{metrics['critical_orders']:,}",
-            "delta": "❌" if metrics['critical_orders'] > 0 else None,
-            "help": f"**Business Logic:** Count of orders on backorder for more than 30 days (critical threshold). These require immediate attention. Formula: COUNT(WHERE days_on_backorder >= 30)"
-        }
-    }
+    # Display KPIs in organized rows (3 columns per row for readability)
 
-    # Add demand-based metrics (Week 4 Priority 5)
+    # Calculate additional metrics for demand-based KPIs
+    customer_days_lost = 0
+    backorder_pct_demand = 0
+    customers_multiple_bo = 0
+
     if 'days_on_backorder' in backorder_data.columns and 'customer_name' in backorder_data.columns:
-        # Customer-Days Lost = sum of (1 customer × days on backorder for each backorder line)
         customer_days_lost = backorder_data['days_on_backorder'].sum()
 
-        # Backorder as % of Monthly Demand (using daily demand × 30)
         if 'daily_demand' in backorder_data.columns and 'backorder_qty' in backorder_data.columns:
             monthly_demand = (backorder_data['daily_demand'] * 30).sum()
             total_backorder_qty = backorder_data['backorder_qty'].sum()
             backorder_pct_demand = (total_backorder_qty / monthly_demand * 100) if monthly_demand > 0 else 0
-        else:
-            backorder_pct_demand = 0
 
-        # Customers with Multiple Backorders
         customer_counts = backorder_data['customer_name'].value_counts()
         customers_multiple_bo = len(customer_counts[customer_counts > 1])
 
-        kpi_data["Customer-Days Lost"] = {
-            "value": f"{customer_days_lost:,.0f}",
-            "delta": "⚠️" if customer_days_lost > 500 else None,
-            "help": f"**Business Logic:** Total impact measured in customer-days. Sum of days each backorder has been open. Represents cumulative customer wait time. Formula: SUM(days_on_backorder)"
-        }
-        kpi_data["BO % Monthly Demand"] = {
-            "value": f"{backorder_pct_demand:.1f}%",
-            "delta": "⚠️" if backorder_pct_demand > 10 else None,
-            "help": f"**Business Logic:** Backorder quantity as percentage of estimated monthly demand. Shows severity relative to normal demand levels. Formula: (SUM(backorder_qty) / SUM(daily_demand × 30)) × 100"
-        }
-        kpi_data["Multiple BO Customers"] = {
-            "value": f"{customers_multiple_bo:,}",
-            "delta": "⚠️" if customers_multiple_bo > 5 else None,
-            "help": f"**Business Logic:** Count of customers with more than one backorder. Indicates breadth of customer dissatisfaction. Formula: COUNT(DISTINCT customer_name WHERE backorder_count > 1)"
-        }
+    # Row 1: Volume Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(
+            label="Total Orders",
+            value=f"{metrics['total_orders']:,}",
+            help="Count of distinct sales orders with unfulfilled backorder quantity"
+        )
+    with col2:
+        st.metric(
+            label="Total Units",
+            value=f"{metrics['total_units']:,}",
+            help="Sum of all backorder quantities across all open orders"
+        )
+    with col3:
+        st.metric(
+            label="Unique SKUs",
+            value=f"{metrics['unique_skus']:,}",
+            help="Count of distinct SKUs on backorder"
+        )
+    with col4:
+        st.metric(
+            label="Unique Customers",
+            value=f"{metrics['unique_customers']:,}",
+            help="Count of distinct customers with open backorders"
+        )
 
-    # Add relief metrics if available
+    # Row 2: Age & Risk Metrics
+    col5, col6, col7, col8 = st.columns(4)
+    with col5:
+        st.metric(
+            label="Avg Age (days)",
+            value=f"{metrics['avg_age']:.1f}",
+            delta="⚠️" if metrics['avg_age'] > 30 else None,
+            help="Average days backorders have been open"
+        )
+    with col6:
+        st.metric(
+            label="Critical Orders",
+            value=f"{metrics['critical_orders']:,}",
+            delta="❌" if metrics['critical_orders'] > 0 else None,
+            help="Orders on backorder for more than 30 days"
+        )
+    with col7:
+        st.metric(
+            label="Customer-Days",
+            value=f"{customer_days_lost:,.0f}",
+            delta="⚠️" if customer_days_lost > 500 else None,
+            help="Total cumulative customer wait time"
+        )
+    with col8:
+        st.metric(
+            label="Multi-BO Customers",
+            value=f"{customers_multiple_bo:,}",
+            delta="⚠️" if customers_multiple_bo > 5 else None,
+            help="Customers with more than one backorder"
+        )
+
+    # Row 3: Relief & Coverage Metrics (if available)
     if relief_metrics:
-        kpi_data["PO Coverage"] = {
-            "value": f"{relief_metrics['po_coverage_pct']:.1f}%",
-            "delta": "✅" if relief_metrics['po_coverage_pct'] >= 80 else "⚠️",
-            "help": f"**Business Logic:** Percentage of backorders with matching vendor POs. Indicates supply chain responsiveness. {relief_metrics['po_coverage_count']} of {relief_metrics['total_backorders']} backorders have PO coverage. Formula: (COUNT(backorders WITH open PO) / COUNT(total backorders)) * 100"
-        }
-        kpi_data["Avg Days to Relief"] = {
-            "value": f"{relief_metrics['avg_days_until_relief']:.1f}",
-            "delta": "⚠️" if relief_metrics['avg_days_until_relief'] > 30 else None,
-            "help": f"**Business Logic:** Average days until backorders are expected to be fulfilled based on vendor-adjusted PO delivery dates. Only includes backorders with PO coverage. Formula: AVG(vendor_adjusted_delivery_date - TODAY) WHERE has_po_coverage = TRUE"
-        }
-        kpi_data["High-Risk"] = {
-            "value": f"{relief_metrics['high_risk_count']:,}",
-            "delta": "❌" if relief_metrics['high_risk_count'] > 0 else None,
-            "help": f"**Business Logic:** Backorders with no PO coverage OR unreliable vendor (OTIF < 75%). These require immediate procurement action. Formula: COUNT(WHERE has_po_coverage = FALSE OR vendor_otif_pct < 75)"
-        }
-
-    render_kpi_row(kpi_data)
+        col9, col10, col11, col12 = st.columns(4)
+        with col9:
+            st.metric(
+                label="PO Coverage",
+                value=f"{relief_metrics['po_coverage_pct']:.1f}%",
+                delta="✅" if relief_metrics['po_coverage_pct'] >= 80 else "⚠️",
+                help="Percentage of backorders with matching vendor POs"
+            )
+        with col10:
+            st.metric(
+                label="Days to Relief",
+                value=f"{relief_metrics['avg_days_until_relief']:.1f}",
+                delta="⚠️" if relief_metrics['avg_days_until_relief'] > 30 else None,
+                help="Average days until expected fulfillment"
+            )
+        with col11:
+            st.metric(
+                label="High-Risk",
+                value=f"{relief_metrics['high_risk_count']:,}",
+                delta="❌" if relief_metrics['high_risk_count'] > 0 else None,
+                help="Backorders with no PO coverage or unreliable vendor"
+            )
+        with col12:
+            st.metric(
+                label="BO % Demand",
+                value=f"{backorder_pct_demand:.1f}%",
+                delta="⚠️" if backorder_pct_demand > 10 else None,
+                help="Backorder qty as % of monthly demand"
+            )
 
     st.divider()
 

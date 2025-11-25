@@ -246,7 +246,7 @@ def create_excel_export(data, section_name, currency="USD"):
 
             # Add comments/notes to scrap recommendation column headers (cells W-AB)
             scrap_column_comments = {
-                'Conservative Scrap Qty': 'CONSERVATIVE APPROACH:\n• SKUs > 3 years old\n• Low demand frequency (≤1 quarter with demand)\n• Keep 12 months supply as safety stock\n• Excludes SKUs < 1 year old (insufficient data)',
+                'Conservative Scrap Qty': 'CONSERVATIVE APPROACH:\n• SKUs > 3 years old\n• Low demand frequency (≤1 month with demand in last 12 months)\n• Keep 12 months supply as safety stock\n• Excludes SKUs < 1 year old (insufficient data)',
                 'Conservative Scrap Value (USD)': 'CONSERVATIVE VALUE:\nUSD value of conservative scrap recommendation\n\nFormula: Conservative Scrap Qty × Last Purchase Price',
                 'Medium Scrap Qty': 'MEDIUM APPROACH:\n• SKUs > 2 years old\n• Keep 6 months supply (base)\n• Keep 3 months for Class C/discontinued/superseded SKUs\n• Adjusts for ABC class, PLM status, alternate codes',
                 'Medium Scrap Value (USD)': 'MEDIUM VALUE:\nUSD value of medium scrap recommendation\n\nFormula: Medium Scrap Qty × Last Purchase Price',
@@ -258,8 +258,7 @@ def create_excel_export(data, section_name, currency="USD"):
             date_columns = ['SKU Creation Date', 'Last Inbound Date', 'PLM Expiration Date']
             currency_columns = ['STD Price', 'Total STD Price', 'USD value over 2 Yrs Supply',
                               'Conservative Scrap Value (USD)', 'Medium Scrap Value (USD)', 'Aggressive Scrap Value (USD)']
-            number_columns = ['Free Qt', 'Q1 Demand', 'Q2 Demand', 'Q3 Demand', 'Q4 Demand',
-                            'Rolling 1 Yr Usage', '# of Qtrs with History', 'Qty over 2 Yrs Supply',
+            number_columns = ['Free Qt', 'Rolling 1 Yr Usage', '# of Months with History', 'Qty over 2 Yrs Supply',
                             'Conservative Scrap Qty', 'Medium Scrap Qty', 'Aggressive Scrap Qty']
             decimal_columns = ['Months of Supply']
 
@@ -285,7 +284,7 @@ def create_excel_export(data, section_name, currency="USD"):
                     worksheet.set_column(col_idx, col_idx, col_width, date_format)
                 elif col_name in currency_columns:
                     worksheet.set_column(col_idx, col_idx, col_width, currency_format)
-                elif col_name in number_columns:
+                elif col_name.startswith('m_') or col_name in number_columns:
                     worksheet.set_column(col_idx, col_idx, col_width, number_format)
                 elif col_name in decimal_columns:
                     worksheet.set_column(col_idx, col_idx, col_width, decimal_format)
@@ -357,7 +356,7 @@ def create_excel_export(data, section_name, currency="USD"):
             summary_sheet.write(row, 0, "CONSERVATIVE", legend_header_format)
             summary_sheet.merge_range(row, 1, row, 6,
                 "• SKUs > 3 years old\n"
-                "• Low demand frequency (≤1 quarter with demand in last 4 quarters)\n"
+                "• Low demand frequency (≤1 month with demand in last 12 months)\n"
                 "• Keep 12 months supply as safety stock\n"
                 "• Excludes SKUs < 1 year old (insufficient historical data)\n"
                 "• Lowest risk, most cautious approach",
@@ -594,7 +593,7 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
 
     This function implements a data-driven, 3-level scrap recommendation system based on:
     - SKU age (from activation date)
-    - Historical demand patterns (quarterly and rolling 1-year)
+    - Historical demand patterns (monthly and rolling 1-year)
     - ABC classification (calculated from inventory value)
     - PLM status (discontinued/expired items)
     - Alternate code status (superseded SKUs)
@@ -615,7 +614,7 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
        - Dead stock (no demand) = scrap everything
 
     Args:
-        inventory_data: Full inventory DataFrame with quarterly demand data
+        inventory_data: Full inventory DataFrame with monthly demand data (last 12 months)
         scrap_days_threshold: Days of supply threshold for legacy "2 years supply" calculation
         currency: Currency for value calculations
 
@@ -667,12 +666,12 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
     # This will be calculated from the delivery history in a future enhancement
 
     # Calculate demand frequency metrics
-    # We already have q1_demand, q2_demand, q3_demand, q4_demand from data_loader.py
-    # Count how many quarters had demand > 0
-    df['qtrs_with_demand'] = 0
-    for q in ['q1_demand', 'q2_demand', 'q3_demand', 'q4_demand']:
-        if q in df.columns:
-            df['qtrs_with_demand'] += (df[q] > 0).astype(int)
+    # The inventory loader now provides last-12-monthly columns named 'm_YYYY_MM'
+    # Count how many months had demand > 0
+    month_columns = sorted([c for c in df.columns if c.startswith('m_')])
+    df['months_with_demand'] = 0
+    for m in month_columns:
+        df['months_with_demand'] += (df[m] > 0).astype(int)
 
     # Calculate monthly demand frequency (based on rolling 1yr usage)
     df['avg_monthly_demand'] = df['rolling_1yr_usage'] / 12 if 'rolling_1yr_usage' in df.columns else 0
@@ -707,7 +706,7 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
         (df['sku_age_days'] > 365) &  # At least 1 year old
         (df['sku_age_days'] > 1095) &  # Prefer >3 years
         (df['daily_demand'] > 0) &  # Must have demand history
-        (df['qtrs_with_demand'] < 2)  # Low demand frequency (< 2 quarters)
+        (df['months_with_demand'] < 2)  # Low demand frequency (< 2 months in last 12)
     )
 
     # Conservative: Keep 12 months supply (365 days)
@@ -873,35 +872,26 @@ def prepare_warehouse_scrap_list(inventory_data, scrap_days_threshold, currency)
     scrap_list['Total STD Price'] = df['on_hand_qty'] * df['last_purchase_price']
     scrap_list['Free Qt'] = df['on_hand_qty']
 
-    if 'q1_demand' in df.columns:
-        scrap_list['Q1 Demand'] = df['q1_demand']
-    else:
-        scrap_list['Q1 Demand'] = 0
-
-    if 'q2_demand' in df.columns:
-        scrap_list['Q2 Demand'] = df['q2_demand']
-    else:
-        scrap_list['Q2 Demand'] = 0
-
-    if 'q3_demand' in df.columns:
-        scrap_list['Q3 Demand'] = df['q3_demand']
-    else:
-        scrap_list['Q3 Demand'] = 0
-
-    if 'q4_demand' in df.columns:
-        scrap_list['Q4 Demand'] = df['q4_demand']
-    else:
-        scrap_list['Q4 Demand'] = 0
+    # Append last-12-month monthly demand columns (m_YYYY_MM) and inventory snapshot columns (inv_m_YYYY_MM)
+    months_present = sorted([c for c in df.columns if c.startswith('m_') or c.startswith('inv_m_')])
+    for c in months_present:
+        if c.startswith('inv_m_'):
+            # inv_m_YYYY_MM -> display as e.g. 'Inv 2024-01'
+            display_name = 'Inv ' + c.replace('inv_m_', '').replace('_', '-')
+        else:
+            # m_YYYY_MM -> display as 'YYYY-01'
+            display_name = c.replace('m_', '').replace('_', '-')
+        scrap_list[display_name] = df[c]
 
     if 'rolling_1yr_usage' in df.columns:
         scrap_list['Rolling 1 Yr Usage'] = df['rolling_1yr_usage']
     else:
         scrap_list['Rolling 1 Yr Usage'] = 0
 
-    if 'qtrs_with_history' in df.columns:
-        scrap_list['# of Qtrs with History'] = df['qtrs_with_history']
+    if 'months_with_history' in df.columns:
+        scrap_list['# of Months with History'] = df['months_with_history']
     else:
-        scrap_list['# of Qtrs with History'] = 0
+        scrap_list['# of Months with History'] = 0
     scrap_list['Months of Supply'] = df['months_of_supply']
     scrap_list['Qty over 2 Yrs Supply'] = df['scrap_qty']
     scrap_list['USD value over 2 Yrs Supply'] = df['scrap_value_usd']
@@ -1640,6 +1630,121 @@ def render_overview_health_tab(filtered_data, currency, settings):
 
     st.divider()
 
+    # --- Inventory History (Monthly Snapshots) ---
+    inv_month_cols = sorted([c for c in filtered_data.columns if c.startswith('inv_m_')])
+    if inv_month_cols:
+        st.markdown("#### 📅 Monthly Inventory Trend")
+        st.caption("Historical on-hand inventory levels by month (most recent 12 months)")
+
+        # Show data freshness indicator
+        if inv_month_cols:
+            most_recent_col = inv_month_cols[-1]
+            parts = most_recent_col.replace('inv_m_', '').split('_')
+            if len(parts) == 2:
+                most_recent_month = pd.Timestamp(year=int(parts[0]), month=int(parts[1]), day=1)
+                st.info(f"📊 **Data as of:** {most_recent_month.strftime('%B %Y')}")
+
+        # View mode selection with clearer labels
+        col_mode, col_sku = st.columns([1, 2])
+        with col_mode:
+            mode = st.selectbox(
+                "View Mode",
+                options=["Total Inventory", "Single SKU"],
+                index=0,
+                key="inv_hist_mode",
+                help="View aggregate totals or drill down to a specific SKU"
+            )
+
+        if mode == "Single SKU":
+            with col_sku:
+                sku_list = sorted(filtered_data['sku'].dropna().unique().tolist())
+                selected_sku = st.selectbox(
+                    "Select SKU",
+                    sku_list,
+                    index=0,
+                    key="inv_hist_sku",
+                    help="Choose a specific SKU to view its inventory history"
+                )
+        else:
+            selected_sku = 'All'
+
+        # Build x-axis from column names
+        def col_to_date(col):
+            try:
+                parts = col.replace('inv_m_', '').split('_')
+                return pd.Timestamp(year=int(parts[0]), month=int(parts[1]), day=1)
+            except Exception:
+                return None
+
+        x = [col_to_date(c) for c in inv_month_cols]
+
+        if selected_sku == 'All':
+            y = filtered_data[inv_month_cols].sum(axis=0).values.tolist()
+            title = 'Total On-Hand Inventory by Month'
+        else:
+            row = filtered_data[filtered_data['sku'] == selected_sku]
+            if row.empty:
+                st.warning('No snapshot history available for selected SKU')
+                y = [0] * len(inv_month_cols)
+            else:
+                y = row[inv_month_cols].iloc[0].astype(float).tolist()
+            title = f'On-Hand Inventory: {selected_sku}'
+
+        # Create enhanced chart with area fill and trend indicators
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=y,
+            mode='lines+markers',
+            name='On Hand',
+            fill='tozeroy',
+            fillcolor='rgba(46, 134, 171, 0.2)',
+            line=dict(color='#2E86AB', width=3),
+            marker=dict(size=8, color='#2E86AB')
+        ))
+
+        # Add month-over-month change annotation for most recent month
+        if len(y) >= 2 and y[-2] != 0:
+            mom_change = ((y[-1] - y[-2]) / y[-2]) * 100
+            change_color = '#06D6A0' if mom_change >= 0 else '#FF6B6B'
+            change_text = f"+{mom_change:.1f}%" if mom_change >= 0 else f"{mom_change:.1f}%"
+            fig.add_annotation(
+                x=x[-1],
+                y=y[-1],
+                text=f"MoM: {change_text}",
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor=change_color,
+                font=dict(color=change_color, size=12)
+            )
+
+        fig.update_layout(
+            title=title,
+            xaxis_title='Month',
+            yaxis_title='On Hand Units',
+            template='plotly_white',
+            yaxis=dict(tickformat=','),
+            hovermode='x unified'
+        )
+        render_chart(fig, height=350)
+
+        # Summary stats below the chart
+        if len(y) >= 2:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Current Month", f"{int(y[-1]):,}" if y[-1] else "N/A")
+            with col2:
+                st.metric("Previous Month", f"{int(y[-2]):,}" if y[-2] else "N/A")
+            with col3:
+                if y[-2] != 0:
+                    mom_pct = ((y[-1] - y[-2]) / y[-2]) * 100
+                    st.metric("MoM Change", f"{mom_pct:+.1f}%", delta=f"{int(y[-1] - y[-2]):,} units")
+                else:
+                    st.metric("MoM Change", "N/A")
+            with col4:
+                avg_inv = sum(y) / len(y) if y else 0
+                st.metric("12-Month Avg", f"{int(avg_inv):,}")
+
     # Category Benchmarking
     st.markdown("#### 🏆 Category Benchmarking")
     category_heatmap = render_category_heatmap(filtered_data, currency)
@@ -1671,13 +1776,34 @@ def render_scrap_opportunities_tab(filtered_data, currency, scrap_threshold):
 def render_slow_movers_tab(filtered_data, currency):
     """Render Slow Movers tab content"""
     st.subheader("🐌 Slow-Moving Items Analysis")
+    st.caption("Items with low turnover velocity requiring attention for markdown or scrap consideration")
 
     value_col = f'stock_value_{currency.lower()}'
+    currency_symbol = '$' if currency == 'USD' else '€'
+
     slow_movers = filtered_data[
         filtered_data['movement_class'].isin(['Slow Moving', 'Very Slow Moving', 'Obsolete Risk', 'Dead Stock'])
     ].copy()
 
     if not slow_movers.empty:
+        # Summary metrics at top
+        total_slow_value = slow_movers[value_col].sum()
+        total_slow_units = slow_movers['on_hand_qty'].sum()
+        total_slow_skus = len(slow_movers)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Slow-Moving SKUs", f"{total_slow_skus:,}")
+        with col2:
+            st.metric("Total Units", f"{int(total_slow_units):,}")
+        with col3:
+            st.metric("Total Value", f"{currency_symbol}{total_slow_value:,.0f}")
+        with col4:
+            avg_dio = slow_movers['dio'].mean()
+            st.metric("Avg DIO", f"{int(avg_dio):,} days")
+
+        st.divider()
+
         slow_movers = slow_movers.sort_values(value_col, ascending=False).head(50)
 
         display_cols = ['sku', 'category', 'abc_class', 'on_hand_qty', 'dio', 'daily_demand',
@@ -1686,11 +1812,12 @@ def render_slow_movers_tab(filtered_data, currency):
 
         result = slow_movers[available_cols].copy()
 
-        # Format numeric columns
-        result['dio'] = result['dio'].round(0).astype(int)
-        result['daily_demand'] = result['daily_demand'].round(2)
-        result['last_purchase_price'] = result['last_purchase_price'].round(2)
-        result[value_col] = result[value_col].round(2)
+        # Apply professional formatting - integers with commas, currency with $
+        result['on_hand_qty'] = result['on_hand_qty'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+        result['dio'] = result['dio'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+        result['daily_demand'] = result['daily_demand'].apply(lambda x: f"{x:,.1f}" if pd.notna(x) else "N/A")
+        result['last_purchase_price'] = result['last_purchase_price'].apply(lambda x: f"{currency_symbol}{x:,.2f}" if pd.notna(x) else "N/A")
+        result[value_col] = result[value_col].apply(lambda x: f"{currency_symbol}{x:,.0f}" if pd.notna(x) else "N/A")
 
         # Rename columns for display
         col_names = {
@@ -1717,8 +1844,11 @@ def render_slow_movers_tab(filtered_data, currency):
 def render_detailed_records_tab(filtered_data, currency):
     """Render Detailed Records tab content"""
     st.subheader("📋 Detailed Inventory Records")
+    st.caption("Complete inventory listing with all metrics - click column headers to sort")
 
     value_col = f'stock_value_{currency.lower()}'
+    currency_symbol = '$' if currency == 'USD' else '€'
+
     display_columns = ['sku', 'category', 'abc_class', 'on_hand_qty', 'in_transit_qty',
                       'daily_demand', 'dio', 'movement_class', 'stock_out_risk',
                       'last_purchase_price', value_col]
@@ -1726,11 +1856,19 @@ def render_detailed_records_tab(filtered_data, currency):
 
     detail_data = filtered_data[available_cols].copy()
 
-    # Format numeric columns
-    detail_data['dio'] = detail_data['dio'].round(0).astype(int)
-    detail_data['daily_demand'] = detail_data['daily_demand'].round(2)
-    detail_data['last_purchase_price'] = detail_data['last_purchase_price'].round(2)
-    detail_data[value_col] = detail_data[value_col].round(2)
+    # Apply professional formatting - integers with commas, currency with $
+    if 'on_hand_qty' in detail_data.columns:
+        detail_data['on_hand_qty'] = detail_data['on_hand_qty'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    if 'in_transit_qty' in detail_data.columns:
+        detail_data['in_transit_qty'] = detail_data['in_transit_qty'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    if 'dio' in detail_data.columns:
+        detail_data['dio'] = detail_data['dio'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+    if 'daily_demand' in detail_data.columns:
+        detail_data['daily_demand'] = detail_data['daily_demand'].apply(lambda x: f"{x:,.1f}" if pd.notna(x) else "N/A")
+    if 'last_purchase_price' in detail_data.columns:
+        detail_data['last_purchase_price'] = detail_data['last_purchase_price'].apply(lambda x: f"{currency_symbol}{x:,.2f}" if pd.notna(x) else "N/A")
+    if value_col in detail_data.columns:
+        detail_data[value_col] = detail_data[value_col].apply(lambda x: f"{currency_symbol}{x:,.0f}" if pd.notna(x) else "N/A")
 
     # Rename columns
     col_names = {
@@ -1740,7 +1878,7 @@ def render_detailed_records_tab(filtered_data, currency):
         'on_hand_qty': 'On Hand',
         'in_transit_qty': 'In Transit',
         'daily_demand': 'Daily Demand',
-        'dio': 'DIO',
+        'dio': 'DIO (days)',
         'movement_class': 'Movement',
         'stock_out_risk': 'Risk',
         'last_purchase_price': 'Unit Price',
@@ -1873,9 +2011,14 @@ def render_inventory_page(inventory_data):
     with tab5:
         render_detailed_records_tab(filtered_data, currency)
 
-    # === FUTURE: MONTHLY SNAPSHOT STRUCTURE ===
-    # Placeholder for future monthly inventory snapshots
-    # This section will display historical trends when snapshot data becomes available
+    # === DATA FRESHNESS FOOTER ===
     st.divider()
-    st.caption("📅 Historical Snapshot Tracking - Coming Soon")
-    st.caption("Future enhancement: Track inventory levels, DIO trends, and value changes over time")
+    # Show data freshness info
+    inv_month_cols = sorted([c for c in inventory_data.columns if c.startswith('inv_m_')])
+    if inv_month_cols:
+        most_recent_col = inv_month_cols[-1]
+        parts = most_recent_col.replace('inv_m_', '').split('_')
+        if len(parts) == 2:
+            most_recent_month = pd.Timestamp(year=int(parts[0]), month=int(parts[1]), day=1)
+            st.caption(f"📅 Inventory data includes monthly snapshots through {most_recent_month.strftime('%B %Y')}")
+    st.caption(f"📊 Showing {len(filtered_data):,} SKUs | Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M')}")

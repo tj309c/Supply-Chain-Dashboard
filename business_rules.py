@@ -875,6 +875,11 @@ def load_alternate_codes_mapping(file_path="ALTERNATE_CODES.csv"):
     old_to_current = {}
     all_codes_by_family = {}
 
+    # Resolve file path relative to this file's directory (project root)
+    if not os.path.isabs(file_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_dir, file_path)
+
     if not os.path.exists(file_path):
         print(f"Warning: Alternate codes file not found at {file_path}")
         _ALTERNATE_CODES_CACHE = {

@@ -28,8 +28,17 @@ def render_kpi_row(metrics_dict):
     Args:
         metrics_dict: Dict with format {"Label": {"value": "123", "delta": "+5%", "help": "Help text"}}
     """
-    cols = st.columns(len(metrics_dict))
-    for idx, (label, data) in enumerate(metrics_dict.items()):
+    # Handle None or non-dict input
+    if not metrics_dict or not isinstance(metrics_dict, dict):
+        return
+
+    # Filter out empty labels to avoid Streamlit warnings
+    valid_metrics = {k: v for k, v in metrics_dict.items() if k and isinstance(k, str) and k.strip()}
+    if not valid_metrics:
+        return
+
+    cols = st.columns(len(valid_metrics))
+    for idx, (label, data) in enumerate(valid_metrics.items()):
         with cols[idx]:
             # Normalize empty / None metric values so the UI doesn't render blank cards
             raw_value = data.get("value", "N/A")
@@ -80,7 +89,7 @@ def render_filter_section(filters_config):
 
     return filter_values
 
-def render_data_table(df, title=None, max_rows=100, downloadable=True, download_filename="data.csv"):
+def render_data_table(df, title=None, max_rows=100, downloadable=True, download_filename="data.csv", height=None):
     """
     Render a data table with optional download
 
@@ -90,6 +99,7 @@ def render_data_table(df, title=None, max_rows=100, downloadable=True, download_
         max_rows: Maximum rows to display
         downloadable: Show download button
         download_filename: Name for downloaded file
+        height: Optional height in pixels for the dataframe
     """
     if title:
         st.subheader(title)
@@ -98,8 +108,11 @@ def render_data_table(df, title=None, max_rows=100, downloadable=True, download_
         st.info("No data available")
         return
 
-    # Display table
-    st.dataframe(df.head(max_rows), width='stretch')
+    # Display table - only pass height if explicitly set to a valid value
+    if height and isinstance(height, (int, float)) and height > 0:
+        st.dataframe(df.head(max_rows), width='stretch', height=int(height))
+    else:
+        st.dataframe(df.head(max_rows), width='stretch')
 
     if len(df) > max_rows:
         st.caption(f"Showing first {max_rows} of {len(df)} records")
@@ -318,3 +331,166 @@ def format_date(date_value, format_str='%Y-%m-%d'):
         return date_value.strftime(format_str)
     except:
         return str(date_value)
+
+
+# ===== BUSINESS PROFESSIONAL TABLE FORMATTING =====
+
+def format_table_value(value, format_type='auto', column_name=None):
+    """
+    Format a single value for business professional table display.
+
+    Args:
+        value: The value to format
+        format_type: One of 'integer', 'currency', 'percentage', 'decimal', 'time', 'auto'
+        column_name: Column name to help auto-detect format type
+
+    Returns:
+        Formatted string value
+    """
+    import pandas as pd
+    import numpy as np
+
+    # Handle None/NaN/empty values
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "N/A"
+    if isinstance(value, str) and value.strip() == "":
+        return "N/A"
+
+    # Auto-detect format type based on column name
+    if format_type == 'auto' and column_name:
+        col_lower = column_name.lower()
+
+        # Currency columns
+        if any(kw in col_lower for kw in ['value', 'price', 'cost', 'amount', 'revenue', 'total', 'usd', 'eur', '$']):
+            if 'pct' not in col_lower and '%' not in col_lower:
+                format_type = 'currency'
+
+        # Percentage columns
+        elif any(kw in col_lower for kw in ['%', 'pct', 'percent', 'rate', 'otif', 'fill']):
+            format_type = 'percentage'
+
+        # Time columns (hours:minutes)
+        elif any(kw in col_lower for kw in ['time', 'duration', 'hrs', 'hours', 'minutes']):
+            format_type = 'time'
+
+        # Quantity/count columns (integers with commas)
+        elif any(kw in col_lower for kw in ['qty', 'quantity', 'count', 'units', 'orders', 'sku', 'days', 'age']):
+            format_type = 'integer'
+
+        # Default to integer for numeric values
+        else:
+            format_type = 'integer'
+
+    try:
+        # Convert to numeric if string
+        if isinstance(value, str):
+            # Try to convert to number
+            try:
+                value = float(value.replace(',', '').replace('$', '').replace('%', ''))
+            except ValueError:
+                return value  # Return as-is if not numeric
+
+        # Apply formatting based on type
+        if format_type == 'currency':
+            return f"${value:,.0f}"
+
+        elif format_type == 'percentage':
+            return f"{value:.1f}%"
+
+        elif format_type == 'decimal':
+            return f"{value:,.2f}"
+
+        elif format_type == 'time':
+            # Convert decimal hours to hr:mm format
+            if isinstance(value, (int, float)):
+                hours = int(value)
+                minutes = int((value - hours) * 60)
+                return f"{hours}:{minutes:02d}"
+            return str(value)
+
+        elif format_type == 'integer':
+            return f"{int(value):,}"
+
+        else:
+            # Default: integer with commas
+            if isinstance(value, float) and value == int(value):
+                return f"{int(value):,}"
+            elif isinstance(value, (int, float)):
+                return f"{value:,.0f}"
+            return str(value)
+
+    except (ValueError, TypeError):
+        return str(value)
+
+
+def format_dataframe_for_display(df, column_formats=None):
+    """
+    Format an entire DataFrame for business professional display.
+
+    Args:
+        df: Pandas DataFrame to format
+        column_formats: Optional dict mapping column names to format types
+                       e.g., {'Total Value': 'currency', 'On Time %': 'percentage'}
+
+    Returns:
+        Formatted DataFrame with string values
+    """
+    import pandas as pd
+
+    if df.empty:
+        return df
+
+    formatted_df = df.copy()
+    column_formats = column_formats or {}
+
+    for col in formatted_df.columns:
+        # Get format type from explicit mapping or auto-detect
+        fmt_type = column_formats.get(col, 'auto')
+
+        # Apply formatting to each value in the column
+        formatted_df[col] = formatted_df[col].apply(
+            lambda x: format_table_value(x, format_type=fmt_type, column_name=col)
+        )
+
+    return formatted_df
+
+
+# Common column format mappings for reuse
+STANDARD_COLUMN_FORMATS = {
+    # Currency columns
+    'Total Value': 'currency',
+    'Stock Value': 'currency',
+    'Unit Price': 'currency',
+    'Price': 'currency',
+    'Cost': 'currency',
+    'Value': 'currency',
+    'Total': 'currency',
+    'Amount': 'currency',
+    'Revenue': 'currency',
+    'Scrap Value': 'currency',
+
+    # Percentage columns
+    'On-Time %': 'percentage',
+    'OTIF %': 'percentage',
+    'Fill Rate': 'percentage',
+    'Service Level': 'percentage',
+    '% of Value': 'percentage',
+    'Percentage': 'percentage',
+
+    # Integer columns
+    'Quantity': 'integer',
+    'Qty': 'integer',
+    'Units': 'integer',
+    'Count': 'integer',
+    'SKU Count': 'integer',
+    'Orders': 'integer',
+    'On Hand': 'integer',
+    'Days': 'integer',
+    'DIO': 'integer',
+    'Age': 'integer',
+
+    # Time columns
+    'Lead Time': 'time',
+    'Cycle Time': 'time',
+    'Duration': 'time',
+}
