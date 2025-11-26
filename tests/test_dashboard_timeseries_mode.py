@@ -22,9 +22,11 @@ def test_dashboard_wrapper_passes_rolling12(monkeypatch):
 
     calls = {}
 
-    def fake_generate(deliveries_df, master_data_df=None, forecast_horizon_days=90, ts_granularity='daily', rolling_months=None):
+    def fake_generate(deliveries_df, master_data_df=None, forecast_horizon_days=90,
+                      ts_granularity='daily', rolling_months=None, smoothing_preset='Balanced'):
         calls['ts_granularity'] = ts_granularity
         calls['rolling_months'] = rolling_months
+        calls['smoothing_preset'] = smoothing_preset
         return [], pd.DataFrame([{'sku':'SKU1'}]), pd.DataFrame(), pd.DataFrame()
 
     monkeypatch.setattr(app, 'generate_demand_forecast', fake_generate)

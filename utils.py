@@ -164,118 +164,6 @@ def get_cached_report_data(report_view: str, data_loader_func, *loader_args) -> 
     return st.session_state[cache_key]
 
 
-def get_filtered_data_as_excel_with_metadata(dfs_to_export_dict, metadata_dict=None, formatting_config=None):
-    """
-    Enhanced export function that includes metadata sheet with filter criteria and formatting options.
-    
-    Args:
-        dfs_to_export_dict: Dictionary of {sheet_name: (dataframe, include_index)}
-        metadata_dict: Optional dict with export metadata like filters, report name, timestamp
-        formatting_config: Optional dict with formatting options (currency_columns, decimal_columns, etc.)
-    
-    Returns:
-        Bytes object containing formatted Excel file
-    """
-    output = io.BytesIO()
-    
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        
-        # Define formats for currency, percentages, and decimals
-        currency_fmt = workbook.add_format({'num_format': '$#,##0.00', 'font_size': 10})
-        percentage_fmt = workbook.add_format({'num_format': '0.0%', 'font_size': 10})
-        decimal_fmt = workbook.add_format({'num_format': '0.00', 'font_size': 10})
-        integer_fmt = workbook.add_format({'num_format': '#,##0', 'font_size': 10})
-        header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
-        metadata_header_fmt = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'font_size': 12})
-        metadata_label_fmt = workbook.add_format({'bold': True, 'bg_color': '#E7E6E6'})
-        
-        # Add metadata sheet if provided
-        if metadata_dict:
-            metadata_df = pd.DataFrame([
-                {'Item': k, 'Value': str(v)} 
-                for k, v in metadata_dict.items()
-            ])
-            metadata_df.to_excel(writer, sheet_name='Export Info', index=False)
-            
-            # Format metadata sheet
-            metadata_ws = writer.sheets['Export Info']
-            metadata_ws.set_column(0, 0, 25)  # Item column
-            metadata_ws.set_column(1, 1, 50)  # Value column
-            
-            # Apply formatting to metadata sheet
-            for row_num, row_data in enumerate(metadata_df.values, 1):
-                metadata_ws.write(row_num, 0, row_data[0], metadata_label_fmt)
-        
-        # Process each data sheet
-        for sheet_name, (df, include_index) in dfs_to_export_dict.items():
-            if not isinstance(df, pd.DataFrame):
-                print(f"Skipping {sheet_name}: Not a DataFrame.")
-                continue
-            if df.empty:
-                print(f"Skipping {sheet_name}: DataFrame is empty.")
-                continue
-            
-            # Handle datetime columns
-            df_to_export = df
-            needs_datetime_cleanup = False
-            
-            for col in df.columns:
-                if pd.api.types.is_datetime64_any_dtype(df[col]):
-                    needs_datetime_cleanup = True
-                    break
-            
-            if needs_datetime_cleanup:
-                df_to_export = df.copy()
-                for col in df_to_export.columns:
-                    if pd.api.types.is_datetime64_any_dtype(df_to_export[col]):
-                        try:
-                            df_to_export[col] = df_to_export[col].dt.tz_localize(None)
-                        except TypeError:
-                            pass
-                        df_to_export[col] = df_to_export[col].dt.strftime('%Y-%m-%d')
-            
-            # Write to Excel
-            df_to_export.to_excel(writer, sheet_name=sheet_name, index=include_index)
-            
-            # Auto-adjust column widths
-            worksheet = writer.sheets[sheet_name]
-            for idx, col in enumerate(df_to_export.columns):
-                series = df_to_export[col]
-                max_len = max(
-                    series.astype(str).map(len).max(),
-                    len(str(series.name))
-                ) + 2
-                worksheet.set_column(idx, idx, max_len)
-                
-                # Apply formatting based on column names and config
-                if formatting_config:
-                    col_lower = str(col).lower()
-                    
-                    # Check for currency columns
-                    if any(term in col_lower for term in ['qty', 'amount', 'cost', 'price', 'total', 'units']):
-                        if 'currency' not in col_lower:  # Avoid double-formatting percentages
-                            for row in range(1, len(df_to_export) + 1):
-                                try:
-                                    val = worksheet.table[row][idx].value if hasattr(worksheet, 'table') else None
-                                    # Apply integer format for quantity columns
-                                    if any(t in col_lower for t in ['qty', 'units', 'quantity']):
-                                        worksheet.write(row, idx, val, integer_fmt)
-                                except:
-                                    pass
-                    
-                    # Check for percentage columns
-                    if 'pct' in col_lower or 'percent' in col_lower or '%' in str(col):
-                        for row in range(1, len(df_to_export) + 1):
-                            try:
-                                val = worksheet.table[row][idx].value if hasattr(worksheet, 'table') else None
-                            except:
-                                pass
-    
-    processed_data = output.getvalue()
-    return processed_data
-
-
 def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate stock value in USD for inventory items using data from INVENTORY.csv.
@@ -304,7 +192,7 @@ def calculate_inventory_stock_value(df: pd.DataFrame) -> pd.DataFrame:
     df['Stock Value USD'] = 0.0
     
     # Check if we have the required pricing columns
-    has_quantity_cols = ('on_hand_qty' in df.columns or 'on_hand_qty' in df.columns)
+    has_quantity_cols = ('on_hand_qty' in df.columns or 'in_transit_qty' in df.columns)
     has_pricing_cols = ('last_purchase_price' in df.columns and 'currency' in df.columns)
     
     print(f"[STOCK VALUE DEBUG] Has quantity cols: {has_quantity_cols}")
