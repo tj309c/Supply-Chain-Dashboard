@@ -37,7 +37,7 @@ The dashboard integrates multiple data streams:
 - **DELIVERIES.csv**: Shipment and delivery records
 - **INVENTORY.csv**: Real-time stock levels across distribution centers
 - **Master Data.csv**: Product catalog with SKU metadata
-- **DOMESTIC INBOUND.csv**: Inbound logistics and receiving data
+- **Inbound_DB.csv**: Inbound logistics and receiving data (domestic + international vendors)
 - **Domestic Vendor POs.csv**: Purchase order tracking
 
 ## 🚀 Quick Start

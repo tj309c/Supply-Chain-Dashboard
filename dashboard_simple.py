@@ -29,6 +29,8 @@ from data_loader import (
     load_stockout_prediction,
     create_sku_description_lookup,
     load_atl_fulfillment,
+    load_international_vendor_pos,
+    load_vendor_po_lead_times,
 )
 
 # Import pricing analysis
@@ -50,7 +52,6 @@ from pages.backorder_page import render_backorder_page
 from pages.sku_mapping_page import render_sku_mapping_page
 from pages.vendor_page import render_vendor_page
 from pages.data_upload_page import render_data_upload_page
-from pages.inbound_page import render_inbound_page
 from pages.debug_page import render_debug_page
 from pages.demand_page import show_demand_page
 from pages.replenishment_page import render_replenishment_page
@@ -130,7 +131,7 @@ def load_all_data(_progress_callback=None, retail_only=True):
         DELIVERIES_PATH = "DELIVERIES.csv"
         INVENTORY_PATH = "INVENTORY.csv"
         VENDOR_POS_PATH = "Domestic Vendor POs.csv"
-        INBOUND_PATH = "DOMESTIC INBOUND.csv"
+        INBOUND_PATH = "Inbound_DB.csv"  # Consolidated domestic + international inbound
         ATL_FULFILLMENT_PATH = "ATL_FULLFILLMENT.csv"
 
         # Load master data (10%)
@@ -250,6 +251,22 @@ def load_all_data(_progress_callback=None, retail_only=True):
             logs_atl = [f"WARNING: Could not load ATL_FULLFILLMENT.csv: {e}"]
             atl_fulfillment_df = pd.DataFrame()
 
+        # Load International Vendor POs for Vendor & Procurement Dashboard (90.5%)
+        update_progress(0.905, "Loading international vendor POs...")
+        try:
+            logs_intl_vendor, international_vendor_pos_df = load_international_vendor_pos(
+                ATL_FULFILLMENT_PATH,
+                file_key='international_vendor_pos'
+            )
+            if retail_only and retail_skus:
+                if 'sku' in international_vendor_pos_df.columns:
+                    _intl_vendor_original = international_vendor_pos_df
+                    intl_norm = _normalize_skus(international_vendor_pos_df['sku'])
+                    international_vendor_pos_df = international_vendor_pos_df[intl_norm.isin(retail_skus)]
+        except Exception as e:
+            logs_intl_vendor = [f"WARNING: Could not load international vendor POs: {e}"]
+            international_vendor_pos_df = pd.DataFrame()
+
         # If retail_only filtering removed rows from one or more primary sources,
         # restore each affected source individually (falls back to original copy where available).
         # This prevents a single-source dropout (e.g., inventory) from showing N/A across the UI.
@@ -318,6 +335,21 @@ def load_all_data(_progress_callback=None, retail_only=True):
         update_progress(0.91, "Calculating vendor performance...")
         logs_vendor_perf, vendor_performance_df = load_vendor_performance(vendor_pos_df, inbound_df)
 
+        # Calculate per-SKU lead times from PO history (91.5%)
+        update_progress(0.915, "Calculating per-SKU lead times...")
+        lead_time_lookup = load_vendor_po_lead_times(VENDOR_POS_PATH, INBOUND_PATH)
+
+        # Calculate international vendor performance (92%)
+        update_progress(0.92, "Calculating international vendor performance...")
+        if not international_vendor_pos_df.empty:
+            # International vendors don't have inbound receipts, so pass empty df
+            logs_intl_vendor_perf, international_vendor_performance_df = load_vendor_performance(
+                international_vendor_pos_df, pd.DataFrame()
+            )
+        else:
+            logs_intl_vendor_perf = ["INFO: No international vendor data available for performance calculation."]
+            international_vendor_performance_df = pd.DataFrame()
+
         # Calculate stockout risk predictions (93%)
         update_progress(0.93, "Predicting stockout risk...")
         logs_stockout, stockout_risk_df = load_stockout_prediction(
@@ -374,12 +406,16 @@ def load_all_data(_progress_callback=None, retail_only=True):
             'vendor_performance': vendor_performance_df,
             'pricing_analysis': pricing_analysis_df,
             'vendor_discount_summary': vendor_discount_summary_df,
+            # International vendor data (for Vendor & Procurement Dashboard)
+            'international_vendor_pos': international_vendor_pos_df,
+            'international_vendor_performance': international_vendor_performance_df,
             'demand_forecast': demand_forecast_df,
             'demand_accuracy': demand_accuracy_df,
             'daily_demand': daily_demand_df,  # Daily demand time series for visualization
             'deliveries': deliveries_unified_df,  # Add deliveries data for demand-based calculations
             'orders_item_lookup': orders_item_df,  # Add orders item lookup for SKU descriptions
             'sku_lookup': sku_lookup,  # SKU description lookup dictionary
+            'lead_time_lookup': lead_time_lookup,  # Per-SKU lead times from PO history
             'load_time': datetime.now(),
             'load_time_str': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 
@@ -396,6 +432,8 @@ def load_all_data(_progress_callback=None, retail_only=True):
             'vendor_pos_logs': logs_vendor_pos,
             'inbound_logs': logs_inbound,
             'vendor_perf_logs': logs_vendor_perf,
+            'intl_vendor_logs': logs_intl_vendor,
+            'intl_vendor_perf_logs': logs_intl_vendor_perf,
             'stockout_logs': logs_stockout,
             'pricing_logs': logs_pricing,
             'relief_logs': logs_relief,
@@ -419,6 +457,8 @@ def load_all_data(_progress_callback=None, retail_only=True):
             'vendor_performance_df': vendor_performance_df,
             'pricing_analysis_df': pricing_analysis_df,
             'vendor_discount_summary_df': vendor_discount_summary_df,
+            'international_vendor_pos_df': international_vendor_pos_df,
+            'international_vendor_performance_df': international_vendor_performance_df,
             'demand_forecast_df': demand_forecast_df,
             'demand_accuracy_df': demand_accuracy_df,
             'retail_mode_applied': retail_mode_applied,
@@ -432,20 +472,24 @@ def load_all_data(_progress_callback=None, retail_only=True):
         return None
 
 
-def compute_forecast_wrapper(deliveries_df, master_df, horizon_days=90, ts_mode='Daily'):
+def compute_forecast_wrapper(deliveries_df, master_df, horizon_days=90, ts_mode='Daily', smoothing_preset='Balanced'):
     """Module-level helper that maps UI time-series selection to the forecasting API.
 
     Kept at module-level so tests and the UI can call the same mapping logic.
+
+    Args:
+        smoothing_preset: One of 'Very Stable (360 days)', 'Stable (180 days)', 'Balanced',
+                         'Responsive', 'Very Responsive'. Controls exponential smoothing alpha.
     """
     if ts_mode == 'Daily' or str(ts_mode).lower() == 'daily':
-        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='daily', rolling_months=None)
+        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='daily', rolling_months=None, smoothing_preset=smoothing_preset)
     if ts_mode == 'Monthly' or str(ts_mode).lower() == 'monthly':
-        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=None)
+        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=None, smoothing_preset=smoothing_preset)
     # Handle 30-month rolling window for demand forecasting
     if 'rolling 30' in str(ts_mode).lower() or ts_mode == 'Rolling 30 months (monthly)':
-        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=30)
+        return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=30, smoothing_preset=smoothing_preset)
     # Any other value -> treat as rolling 12 months monthly by default
-    return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=12)
+    return generate_demand_forecast(deliveries_df, master_data_df=master_df, forecast_horizon_days=horizon_days, ts_granularity='monthly', rolling_months=12, smoothing_preset=smoothing_preset)
 
 # ===== MAIN APPLICATION =====
 
@@ -550,6 +594,18 @@ def main():
     # Store selected year in session state for use by pages
     st.session_state['selected_year'] = int(selected_year)
     st.session_state['use_rolling_12'] = use_rolling_12
+
+    # Global currency selector
+    display_currency = st.sidebar.radio(
+        "Display Currency",
+        options=["EUR", "USD"],
+        index=0,  # Default to EUR (source currency)
+        horizontal=True,
+        help="Values in Inbound_DB.csv are in EUR (Group Currency). Select USD to convert."
+    )
+    st.session_state['display_currency'] = display_currency
+    # EUR to USD conversion rate (can be updated as needed)
+    st.session_state['eur_to_usd_rate'] = 1.08
 
     # Cached, on-demand forecast computation used by the Demand page and for pre-warming
     @st.cache_data(ttl=3600, show_spinner="Computing demand forecasts...")
@@ -662,7 +718,14 @@ def main():
         render_overview_page(
             service_data=data['service'],
             backorder_data=data['backorder'],
-            inventory_data=data['inventory_analysis']  # Use inventory_analysis to get DIO calculations
+            inventory_data=data['inventory_analysis'],  # Use inventory_analysis to get DIO calculations
+            vendor_performance_data=data.get('vendor_performance', pd.DataFrame()),
+            international_vendor_performance_data=data.get('international_vendor_performance', pd.DataFrame()),
+            international_vendor_pos_data=data.get('international_vendor_pos', pd.DataFrame()),
+            inbound_data=data.get('inbound', pd.DataFrame()),  # Inbound_DB.csv for vendor service level
+            deliveries_data=data.get('deliveries', pd.DataFrame()),  # For Operating Budget
+            master_data=data.get('master_df', pd.DataFrame()),  # For Operating Budget category lookup
+            display_currency=display_currency  # For currency conversion
         )
 
     elif selected_page == "service_level":
@@ -688,51 +751,50 @@ def main():
             po_data=data['vendor_pos'],
             vendor_performance=data['vendor_performance'],
             pricing_analysis=data['pricing_analysis'],
-            vendor_discount_summary=data['vendor_discount_summary']
+            vendor_discount_summary=data['vendor_discount_summary'],
+            # International vendor data for Domestic/International view toggle
+            international_po_data=data.get('international_vendor_pos', pd.DataFrame()),
+            international_vendor_performance=data.get('international_vendor_performance', pd.DataFrame()),
+            international_pricing_analysis=None,  # Not available for international (no pricing data)
+            international_vendor_discount_summary=None  # Not available for international
         )
 
     elif selected_page == "demand":
-        # Lazily compute or fetch cached demand forecast data only when user navigates to this page
-        @st.cache_data(ttl=3600, show_spinner="Computing demand forecasts...")
-        def _compute_demand_forecast(deliveries_df, master_df, horizon_days=90, ts_mode='daily'):
-            try:
-                return compute_forecast_wrapper(deliveries_df, master_df, horizon_days, ts_mode=ts_mode)
-            except Exception as e:
-                st.error(f"Error computing demand forecast: {e}")
-                return [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-        # For demand forecasting, always use 30 months of data for better forecast accuracy
-        # (more historical data = better moving averages and trend analysis)
-        demand_ts_mode = 'Rolling 30 months (monthly)'
-        st.info("📊 **Demand Forecasting uses 30 months of historical data** for more accurate forecasts (overrides the sidebar filter).")
-
-        # Compute on demand (will use cache if run within TTL)
-        logs_demand, demand_forecast_df, demand_accuracy_df, daily_demand_df = _compute_demand_forecast(
-            data['deliveries'], data.get('master_df', pd.DataFrame()), 90, ts_mode=demand_ts_mode
-        )
-
+        # Pass deliveries and master data to demand page - it handles its own forecast computation
+        # with user-selectable smoothing preset
         show_demand_page(
             deliveries_df=data['deliveries'],
-            demand_forecast_df=demand_forecast_df,
-            forecast_accuracy_df=demand_accuracy_df,
+            demand_forecast_df=pd.DataFrame(),  # Will be computed inside demand page
+            forecast_accuracy_df=pd.DataFrame(),
             master_data_df=data.get('master_df', pd.DataFrame()),
-            daily_demand_df=daily_demand_df
+            daily_demand_df=pd.DataFrame()
         )
 
     elif selected_page == "replenishment":
         # Replenishment planning needs demand forecast data
         # Compute demand forecast if not already available
+        # Uses DAILY granularity (same as demand page) for best seasonality detection
         @st.cache_data(ttl=3600, show_spinner="Computing demand forecasts for replenishment...")
-        def _compute_demand_for_replenishment(deliveries_df, master_df, horizon_days=90):
+        def _compute_demand_for_replenishment(deliveries_df, master_df, horizon_days=270):
             try:
-                return compute_forecast_wrapper(deliveries_df, master_df, horizon_days, ts_mode='Rolling 30 months (monthly)')
+                # Use daily granularity with 30-month rolling window and Balanced preset
+                # This matches the demand page's methodology for consistency
+                return generate_demand_forecast(
+                    deliveries_df,
+                    master_data_df=master_df,
+                    forecast_horizon_days=horizon_days,
+                    ts_granularity='daily',  # Daily for best seasonality (same as demand page)
+                    rolling_months=30,
+                    smoothing_preset='Balanced'
+                )
             except Exception as e:
                 st.warning(f"Could not compute demand forecast: {e}")
                 return [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         # Get demand forecast (use cached if available)
+        # Use 270-day horizon (9 months) to match demand page
         _, demand_forecast_df, _, _ = _compute_demand_for_replenishment(
-            data['deliveries'], data.get('master_df', pd.DataFrame()), 90
+            data['deliveries'], data.get('master_df', pd.DataFrame()), 270
         )
 
         render_replenishment_page(
@@ -741,7 +803,8 @@ def main():
             backorder_data=data['backorder'],
             vendor_pos_data=data['vendor_pos'],
             atl_fulfillment_data=data.get('atl_fulfillment', pd.DataFrame()),
-            master_data=data.get('master_df', pd.DataFrame())
+            master_data=data.get('master_df', pd.DataFrame()),
+            lead_time_lookup=data.get('lead_time_lookup', {})
         )
 
     elif selected_page == "data_upload":

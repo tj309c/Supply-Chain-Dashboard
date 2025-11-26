@@ -6,3 +6,6 @@ scipy
 xlsxwriter
 pytz
 pytest
+pytest-xdist
+numba
+joblib

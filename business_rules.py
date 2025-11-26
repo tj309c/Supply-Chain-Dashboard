@@ -18,25 +18,6 @@ CURRENCY_RULES = {
     }
 }
 
-def convert_currency(amount, from_currency="USD", to_currency="USD"):
-    """
-    Convert amount from one currency to another.
-
-    Args:
-        amount: Numeric value to convert
-        from_currency: Source currency (USD or EUR)
-        to_currency: Target currency (USD or EUR)
-
-    Returns:
-        Converted amount
-    """
-    if from_currency == to_currency:
-        return amount
-
-    conversion_key = f"{from_currency}_to_{to_currency}"
-    rate = CURRENCY_RULES["conversion_rates"].get(conversion_key, 1.0)
-    return amount * rate
-
 
 # ===== INVENTORY CLASSIFICATION RULES =====
 
@@ -409,7 +390,7 @@ LEAD_TIME_RULES = {
 
     "data_sources": {
         "vendor_pos": "Domestic Vendor POs.csv",
-        "inbound_receipts": "DOMESTIC INBOUND.csv"
+        "inbound_receipts": "Inbound_DB.csv"
     }
 }
 
@@ -593,8 +574,8 @@ DATA_FIELD_DEFINITIONS = {
         }
     },
 
-    "DOMESTIC INBOUND.csv": {
-        "file_description": "Inbound logistics and receipts",
+    "Inbound_DB.csv": {
+        "file_description": "Consolidated inbound receipts and PO tracking (domestic and international)",
         "fields": {
             "Purchase Order Number": {
                 "description": "PO number (links to Vendor POs)",
@@ -602,8 +583,8 @@ DATA_FIELD_DEFINITIONS = {
                 "required": True,
                 "used_for": ["po_tracking", "lead_time_calculation"]
             },
-            "Posting Date": {
-                "description": "Date when goods were received/posted",
+            "Date": {
+                "description": "Receipt/posting date (YYYYMMDD format)",
                 "data_type": "date",
                 "required": True,
                 "used_for": ["lead_time_calculation", "receipt_tracking"]
@@ -613,6 +594,36 @@ DATA_FIELD_DEFINITIONS = {
                 "data_type": "string",
                 "required": True,
                 "used_for": ["inventory_updates", "lead_time_calculation"]
+            },
+            "*Purchase Orders IC Flag": {
+                "description": "International/Domestic flag (YES=international, NO=domestic)",
+                "data_type": "string",
+                "required": True,
+                "used_for": ["vendor_segmentation", "kpi_filtering"]
+            },
+            "POP Good Receipts Quantity": {
+                "description": "Quantity received on this receipt",
+                "data_type": "numeric",
+                "required": True,
+                "used_for": ["receipt_tracking", "fill_rate_calculation"]
+            },
+            "POP Good Receipts on Time Quantity": {
+                "description": "Pre-calculated on-time receipt quantity",
+                "data_type": "numeric",
+                "required": False,
+                "used_for": ["on_time_delivery_kpi"]
+            },
+            "POP Purchase Order Open Overdue Quantity": {
+                "description": "Pre-calculated open overdue quantity",
+                "data_type": "numeric",
+                "required": False,
+                "used_for": ["overdue_kpi", "fill_rate_calculation"]
+            },
+            "PLM: Level Classification 4": {
+                "description": "Product category classification (e.g., RETAIL PERMANENT, WHLS SEASONAL)",
+                "data_type": "string",
+                "required": False,
+                "used_for": ["category_filtering", "segmentation"]
             }
         }
     },
@@ -723,21 +734,37 @@ CALCULATED_FIELDS = {
 
 # ===== HELPER FUNCTIONS =====
 
-def get_field_definition(file_name, field_name):
+def convert_currency(value, from_currency, to_currency):
     """
-    Get the definition of a specific field from a data source.
+    Convert a value from one currency to another using defined conversion rates.
 
     Args:
-        file_name: Name of the data file (e.g., "INVENTORY.csv")
-        field_name: Name of the field
+        value: Numeric value to convert
+        from_currency: Source currency code (e.g., 'USD', 'EUR')
+        to_currency: Target currency code (e.g., 'USD', 'EUR')
 
     Returns:
-        Dictionary with field definition or None if not found
+        Converted value, or original value if conversion not possible
     """
-    if file_name in DATA_FIELD_DEFINITIONS:
-        fields = DATA_FIELD_DEFINITIONS[file_name].get("fields", {})
-        return fields.get(field_name)
-    return None
+    if value is None or from_currency == to_currency:
+        return value
+
+    from_currency = str(from_currency).upper()
+    to_currency = str(to_currency).upper()
+
+    conversion_key = f"{from_currency}_to_{to_currency}"
+    rates = CURRENCY_RULES.get("conversion_rates", {})
+
+    if conversion_key in rates:
+        return value * rates[conversion_key]
+
+    # Try reverse conversion
+    reverse_key = f"{to_currency}_to_{from_currency}"
+    if reverse_key in rates:
+        return value / rates[reverse_key]
+
+    # No conversion available, return original value
+    return value
 
 
 def get_scrap_threshold(user_input=None):

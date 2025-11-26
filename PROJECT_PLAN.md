@@ -447,7 +447,7 @@ All current inbound and vendor data sources represent **DOMESTIC SUPPLIERS ONLY*
 2. **DELIVERIES.csv** - Shipment and delivery records
 3. **INVENTORY.csv** - Real-time stock levels
 4. **Master Data.csv** - Product catalog with SKU metadata
-5. **DOMESTIC INBOUND.csv** - Inbound logistics *(domestic suppliers only)*
+5. **Inbound_DB.csv** - Inbound logistics *(domestic + international suppliers)*
 6. **Domestic Vendor POs.csv** - Purchase order tracking *(domestic suppliers only)*
 
 **Future Data Sources (TBD - International Suppliers)**:
@@ -656,7 +656,7 @@ Planned enhancements for inventory module:
 2. **DELIVERIES.csv** - Shipment and delivery records
 3. **INVENTORY.csv** - Real-time stock levels
 4. **Master Data.csv** - Product catalog with SKU metadata
-5. **DOMESTIC INBOUND.csv** - Inbound logistics (optional)
+5. **Inbound_DB.csv** - Inbound logistics (optional)
 6. **Domestic Vendor POs.csv** - Purchase order tracking (optional)
 7. **ALTERNATE_CODES.csv** - SKU alternate/legacy code mappings (optional)
 
@@ -753,7 +753,7 @@ Each template should include:
 │ │                                              │
 │ └─ Optional Files (1/3 uploaded)               │
 │    ✓ ALTERNATE_CODES.csv [Replace] [Template]  │
-│    ○ DOMESTIC INBOUND.csv  [Upload] [Template] │
+│    ○ Inbound_DB.csv  [Upload] [Template] │
 │    ○ Domestic Vendor POs   [Upload] [Template] │
 │                                                 │
 │ 📊 Data Status                                  │
@@ -963,7 +963,7 @@ VENDOR_RULES = {
 - Support demand planning and reorder point calculations
 
 **Data Integration (Current - Domestic Only)**:
-- Primary: `Domestic Vendor POs.csv`, `DOMESTIC INBOUND.csv` *(domestic suppliers only)*
+- Primary: `Domestic Vendor POs.csv`, `Inbound_DB.csv` *(domestic suppliers only)*
 - Supporting: `INVENTORY.csv` (receipts), `Master Data.csv`, `DELIVERIES.csv` (demand)
 - Links to: Backorder Module (expected relief), Inventory Module (incoming stock), Demand Planning (future)
 
@@ -1186,7 +1186,7 @@ VENDOR_RULES = {
 Priority: Easiest + Most Impactful
 
 1. PO Data Loader (HIGH IMPACT, MEDIUM EFFORT)
-   - Load Domestic Vendor POs.csv and DOMESTIC INBOUND.csv
+   - Load Domestic Vendor POs.csv and Inbound_DB.csv
    - Basic data cleaning and validation
    - Create unified PO dataset
 
@@ -1876,7 +1876,7 @@ def apply_statistical_layer(base_forecast, sku):
 
 **Data Integration**:
 - Primary: Budget forecast data (category-level inbound/outbound/inventory targets)
-- Supporting: DELIVERIES.csv (outbound actuals), DOMESTIC INBOUND.csv (inbound actuals), INVENTORY.csv (inventory actuals)
+- Supporting: DELIVERIES.csv (outbound actuals), Inbound_DB.csv (inbound actuals), INVENTORY.csv (inventory actuals)
 - Links to: Executive Overview (budget health KPIs), Inventory Module (inventory value tracking), Vendor Module (inbound spend)
 
 **Key Features**:

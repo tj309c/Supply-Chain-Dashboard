@@ -33,7 +33,9 @@ SERVICE_LEVEL_Z_SCORES = {
 
 # Default parameters
 DEFAULT_SERVICE_LEVEL = 95
-DEFAULT_LEAD_TIME_DAYS = 90  # Conservative default when no PO history
+DEFAULT_LEAD_TIME_DAYS = 73  # Domestic median lead time
+DEFAULT_DOMESTIC_LEAD_TIME = 73  # Domestic vendor median lead time (from PO analysis)
+DEFAULT_INTERNATIONAL_LEAD_TIME = 114  # International vendor median lead time (from ATL analysis)
 REVIEW_PERIOD_DAYS = 14  # Bi-monthly review cycle
 SAFETY_STOCK_BUFFER_DAYS = 5  # Additional buffer added to lead time
 
@@ -209,6 +211,138 @@ def calculate_suggested_order(
     return max(0, round(suggested_order, 0))
 
 
+def calculate_vendor_lead_times(
+    domestic_po_df: pd.DataFrame,
+    international_po_df: pd.DataFrame
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """
+    Calculate per-vendor average lead times from PO history.
+
+    Uses the date difference between order creation and requested delivery
+    for domestic POs, and order date to ETA for international.
+
+    Args:
+        domestic_po_df: Domestic vendor PO data
+        international_po_df: International (ATL) fulfillment data
+
+    Returns:
+        Tuple of (vendor_lead_times dict, sku_lead_times dict)
+        - vendor_lead_times: {vendor_name: avg_lead_time_days}
+        - sku_lead_times: {sku: avg_lead_time_days}
+    """
+    vendor_lead_times = {}
+    sku_lead_times = {}
+
+    # Process domestic POs
+    if not domestic_po_df.empty:
+        dom_df = domestic_po_df.copy()
+
+        # Find required columns
+        sku_col = None
+        for col in ['sku', 'SAP Material Code', 'Material Number']:
+            if col in dom_df.columns:
+                sku_col = col
+                break
+
+        vendor_col = None
+        for col in ['vendor_name', 'SAP Supplier - Supplier Description', 'Vendor', 'Supplier']:
+            if col in dom_df.columns:
+                vendor_col = col
+                break
+
+        # Find date columns for lead time calculation
+        order_date_col = None
+        for col in ['Order Creation Date', 'order_date', 'Created On', 'SAP Purchase Orders - Created On']:
+            if col in dom_df.columns:
+                order_date_col = col
+                break
+
+        delivery_date_col = None
+        for col in ['Requested Delivery Date', 'requested_delivery_date', 'Req. Delivery Date']:
+            if col in dom_df.columns:
+                delivery_date_col = col
+                break
+
+        if sku_col and vendor_col and order_date_col and delivery_date_col:
+            # Calculate lead time for each PO line
+            dom_df['_sku'] = normalize_sku_series(dom_df[sku_col])
+            dom_df['_vendor'] = dom_df[vendor_col].fillna('Unknown').astype(str).str.strip()
+
+            # Parse dates
+            dom_df['_order_date'] = pd.to_datetime(dom_df[order_date_col], errors='coerce')
+            dom_df['_delivery_date'] = pd.to_datetime(dom_df[delivery_date_col], errors='coerce')
+
+            # Calculate lead time in days
+            dom_df['_lead_time'] = (dom_df['_delivery_date'] - dom_df['_order_date']).dt.days
+
+            # Filter valid lead times (positive and reasonable: 1-365 days)
+            valid_lt = dom_df[(dom_df['_lead_time'] > 0) & (dom_df['_lead_time'] <= 365)]
+
+            if not valid_lt.empty:
+                # Per-vendor average
+                vendor_avg = valid_lt.groupby('_vendor')['_lead_time'].median()
+                vendor_lead_times = vendor_avg.to_dict()
+
+                # Per-SKU average
+                sku_avg = valid_lt.groupby('_sku')['_lead_time'].median()
+                sku_lead_times = sku_avg.to_dict()
+
+    # Process international POs (ATL data)
+    if not international_po_df.empty:
+        intl_df = international_po_df.copy()
+
+        # Find required columns
+        sku_col = None
+        for col in ['sku', 'SAP Item Material Code']:
+            if col in intl_df.columns:
+                sku_col = col
+                break
+
+        vendor_col = None
+        for col in ['vendor_name', 'Shipping Factory Name', 'Factory']:
+            if col in intl_df.columns:
+                vendor_col = col
+                break
+
+        # ATL has Order Date and ETA DC
+        order_date_col = None
+        for col in ['Order Date', 'order_date']:
+            if col in intl_df.columns:
+                order_date_col = col
+                break
+
+        eta_col = None
+        for col in ['ETA DC', 'eta_dc', 'Expected Delivery']:
+            if col in intl_df.columns:
+                eta_col = col
+                break
+
+        if sku_col and vendor_col and order_date_col and eta_col:
+            intl_df['_sku'] = normalize_sku_series(intl_df[sku_col])
+            intl_df['_vendor'] = intl_df[vendor_col].fillna('Unknown').astype(str).str.strip()
+
+            intl_df['_order_date'] = pd.to_datetime(intl_df[order_date_col], errors='coerce')
+            intl_df['_eta_date'] = pd.to_datetime(intl_df[eta_col], errors='coerce')
+
+            intl_df['_lead_time'] = (intl_df['_eta_date'] - intl_df['_order_date']).dt.days
+
+            valid_lt = intl_df[(intl_df['_lead_time'] > 0) & (intl_df['_lead_time'] <= 365)]
+
+            if not valid_lt.empty:
+                # Add international vendors (with suffix to differentiate)
+                intl_vendor_avg = valid_lt.groupby('_vendor')['_lead_time'].median()
+                for vendor, lt in intl_vendor_avg.items():
+                    vendor_lead_times[f"{vendor} (International)"] = lt
+
+                # Add international SKUs to sku_lead_times (if not already present)
+                intl_sku_avg = valid_lt.groupby('_sku')['_lead_time'].median()
+                for sku, lt in intl_sku_avg.items():
+                    if sku not in sku_lead_times:
+                        sku_lead_times[sku] = lt
+
+    return vendor_lead_times, sku_lead_times
+
+
 def calculate_priority_score(
     days_of_supply: float,
     backorder_qty: float,
@@ -296,7 +430,7 @@ def generate_replenishment_plan(
         international_po_df: International fulfillment PO data (ATL)
         master_df: Master data for vendor lookup and category filter
         service_level: Target service level as decimal (default 0.95 for 95%)
-        default_lead_time_days: Default lead time when no PO history (default 90)
+        default_lead_time_days: Default lead time for planning horizon (default 90)
         review_period_days: Review period in days (default 14 for bi-monthly)
 
     Returns:
@@ -430,37 +564,51 @@ def generate_replenishment_plan(
             logs.append(f"INFO: Found {len(domestic_open)} SKUs with open domestic POs")
 
     # Process international POs (ATL Fulfillment)
+    # Note: ATL data is pre-processed by load_atl_fulfillment() which already:
+    #   - Filters for non-delivered shipments
+    #   - Aggregates by SKU
+    #   - Has columns: sku, open_qty, expected_delivery_date, vendor_name, status
     intl_open = pd.DataFrame()
     if not international_po_df.empty:
         intl_df = international_po_df.copy()
 
-        # SKU column is 'SAP Item Material Code'
-        if 'SAP Item Material Code' in intl_df.columns:
-            intl_df['sku'] = normalize_sku_series(intl_df['SAP Item Material Code'])
+        # Check if data is pre-processed (has 'sku' and 'open_qty')
+        if 'sku' in intl_df.columns and 'open_qty' in intl_df.columns:
+            # Data is already processed by load_atl_fulfillment
+            intl_df['sku'] = normalize_sku_series(intl_df['sku'])
+            intl_df['open_qty'] = pd.to_numeric(intl_df['open_qty'], errors='coerce').fillna(0)
 
-        # Qty column is ' TOTAL Good Issue Qty ' (note spaces)
-        qty_col = None
-        for col in intl_df.columns:
-            if 'good issue' in col.lower() and 'qty' in col.lower():
-                qty_col = col
-                break
+            # Already filtered for open shipments, just aggregate by SKU
+            intl_open = intl_df.groupby('sku').agg({
+                'open_qty': 'sum'
+            }).reset_index()
+            intl_open['source'] = 'International'
+            logs.append(f"INFO: Found {len(intl_open)} SKUs with {intl_open['open_qty'].sum():,.0f} units in international transit")
+        else:
+            # Fallback for raw ATL data (legacy support)
+            sku_col = 'SAP Item Material Code' if 'SAP Item Material Code' in intl_df.columns else None
+            qty_col = None
+            for col in intl_df.columns:
+                if 'good issue' in col.lower() and 'qty' in col.lower():
+                    qty_col = col
+                    break
 
-        # Status column is 'ON TIME TRANSIT'
-        if qty_col and 'ON TIME TRANSIT' in intl_df.columns:
-            intl_df['open_qty'] = pd.to_numeric(intl_df[qty_col], errors='coerce').fillna(0)
+            if sku_col and qty_col and 'ON TIME TRANSIT' in intl_df.columns:
+                intl_df['sku'] = normalize_sku_series(intl_df[sku_col])
+                intl_df['open_qty'] = pd.to_numeric(intl_df[qty_col], errors='coerce').fillna(0)
 
-            # Filter for non-delivered (ON TIME or ON DELAY = still in transit)
-            intl_df = intl_df[
-                (intl_df['ON TIME TRANSIT'] != 'DELIVERED') &
-                (intl_df['open_qty'] > 0)
-            ]
+                # Filter for non-delivered (ON TIME or ON DELAY = still in transit)
+                intl_df = intl_df[
+                    (intl_df['ON TIME TRANSIT'] != 'DELIVERED') &
+                    (intl_df['open_qty'] > 0)
+                ]
 
-            if not intl_df.empty:
-                intl_open = intl_df.groupby('sku').agg({
-                    'open_qty': 'sum'
-                }).reset_index()
-                intl_open['source'] = 'International'
-                logs.append(f"INFO: Found {len(intl_open)} SKUs with open international shipments")
+                if not intl_df.empty:
+                    intl_open = intl_df.groupby('sku').agg({
+                        'open_qty': 'sum'
+                    }).reset_index()
+                    intl_open['source'] = 'International'
+                    logs.append(f"INFO: Found {len(intl_open)} SKUs with open international shipments (raw data)")
 
     # Combine domestic and international
     if not domestic_open.empty or not intl_open.empty:
@@ -469,11 +617,14 @@ def generate_replenishment_plan(
             'open_qty': 'sum'
         }).reset_index()
 
-    # ===== STEP 6: Calculate lead times =====
-    logs.append("INFO: Calculating lead times...")
+    # ===== STEP 6: Calculate lead times (cascading: SKU → Vendor → Overall) =====
+    logs.append("INFO: Calculating lead times from PO history...")
 
-    # For now, use default lead time. Future enhancement: calculate from PO history
-    # TODO: Calculate actual lead times from domestic PO + inbound receipt dates
+    # Calculate per-vendor and per-SKU lead times from PO data
+    vendor_lead_times, sku_lead_times = calculate_vendor_lead_times(
+        domestic_po_df, international_po_df
+    )
+    logs.append(f"INFO: Calculated lead times for {len(vendor_lead_times)} vendors and {len(sku_lead_times)} SKUs")
 
     # ===== STEP 7: Build replenishment plan =====
     logs.append("INFO: Building replenishment plan...")
@@ -503,42 +654,43 @@ def generate_replenishment_plan(
     if not open_po_summary.empty:
         po_lookup = dict(zip(open_po_summary['sku'], open_po_summary['open_qty']))
 
-    # Build vendor/product lookup from ORIGINAL inventory_df (before aggregation)
-    # This has the vendor and product_name columns
-    vendor_product_lookup = {}
-    if not inventory_df.empty:
-        inv_orig = inventory_df.copy()
-        # Find vendor column
-        vendor_col = None
-        for col in ['POP Last Purchase: Vendor Name', 'vendor', 'Vendor', 'Supplier', 'vendor_name']:
-            if col in inv_orig.columns:
-                vendor_col = col
-                break
-        # Find product name column
-        name_col = None
-        for col in ['product_name', 'Product Name', 'Material Description', 'description']:
-            if col in inv_orig.columns:
-                name_col = col
-                break
+    # ===== BUILD VENDOR LOOKUP (cascading priority) =====
+    # Priority 1: Domestic Vendor POs (100% vendor coverage for SKUs with POs)
+    # Priority 2: Master Data (26% coverage but more SKUs)
+    # Priority 3: Inventory data (fallback)
+
+    # Priority 1: Vendor PO lookup - most accurate for SKUs with active POs
+    vendor_po_lookup = {}
+    if not domestic_po_df.empty:
+        po_df_temp = domestic_po_df.copy()
         # Find SKU column
         sku_col = None
-        for col in ['sku', 'SKU', 'Material Number']:
-            if col in inv_orig.columns:
+        for col in ['sku', 'SAP Material Code', 'Material Number']:
+            if col in po_df_temp.columns:
                 sku_col = col
                 break
+        # Find vendor column
+        vendor_col = None
+        for col in ['vendor_name', 'SAP Supplier - Supplier Description', 'Vendor', 'Supplier']:
+            if col in po_df_temp.columns:
+                vendor_col = col
+                break
 
-        if sku_col:
-            inv_orig['_norm_sku'] = normalize_sku_series(inv_orig[sku_col])
-            for _, r in inv_orig.drop_duplicates('_norm_sku').iterrows():
+        if sku_col and vendor_col:
+            po_df_temp['_norm_sku'] = normalize_sku_series(po_df_temp[sku_col])
+            # Get unique SKU -> vendor mapping (use most recent or most common)
+            for _, r in po_df_temp.drop_duplicates('_norm_sku').iterrows():
                 norm_sku = r['_norm_sku']
-                vendor = r.get(vendor_col, 'Unknown') if vendor_col else 'Unknown'
-                product = r.get(name_col, '') if name_col else ''
-                # Clean up vendor - replace NaN with Unknown
-                if pd.isna(vendor) or str(vendor).strip() == '':
+                vendor = r.get(vendor_col, 'Unknown')
+                if pd.isna(vendor) or str(vendor).strip() in ['', 'nan', 'None']:
                     vendor = 'Unknown'
-                vendor_product_lookup[norm_sku] = (vendor, product)
+                else:
+                    vendor = str(vendor).strip()
+                if vendor != 'Unknown':
+                    vendor_po_lookup[norm_sku] = vendor
+            logs.append(f"INFO: Built vendor lookup from PO data: {len(vendor_po_lookup)} SKUs with vendor names")
 
-    # Master data lookup as fallback: sku -> (vendor, product_name)
+    # Priority 2: Master data lookup
     master_lookup = {}
     if not master_df.empty:
         sku_col = None
@@ -552,7 +704,7 @@ def generate_replenishment_plan(
             if col in master_df.columns:
                 vendor_col = col
                 break
-        for col in ['product_name', 'Product Name', 'Material Description', 'description']:
+        for col in ['product_name', 'Product Name', 'Material Description', 'description', 'sku_description']:
             if col in master_df.columns:
                 name_col = col
                 break
@@ -571,14 +723,19 @@ def generate_replenishment_plan(
     plan_list = []
     z_score = SERVICE_LEVEL_Z_SCORES.get(service_level, SERVICE_LEVEL_Z_SCORES[95])
     service_level_int = int(service_level * 100) if service_level < 1 else int(service_level)
-    lead_time = default_lead_time_days
 
     # Use itertuples for faster iteration (3-5x faster than iterrows)
     for row in demand_df.itertuples(index=False):
         sku = row.sku
 
         # Get demand data from named tuple
-        daily_demand = getattr(row, 'primary_forecast_daily', None) or getattr(row, 'avg_daily_demand', 0) or 0
+        # Priority: exp_smooth_seasonal (best) > exp_smooth > primary_forecast_daily > avg_daily_demand
+        daily_demand = (
+            getattr(row, 'exp_smooth_seasonal', None) or
+            getattr(row, 'exp_smooth', None) or
+            getattr(row, 'primary_forecast_daily', None) or
+            getattr(row, 'avg_daily_demand', 0) or 0
+        )
         demand_std = getattr(row, 'demand_std', 0) or 0
 
         # Convert monthly std to daily if needed (for monthly data)
@@ -587,13 +744,45 @@ def generate_replenishment_plan(
 
         # Get inventory from lookup (O(1) instead of O(n))
         inv_data = inv_lookup.get(sku, (0, 0, 0))
-        on_hand, in_transit, unit_cost = inv_data
+        on_hand, _in_transit_inventory, unit_cost = inv_data
 
         # Get backorders from lookup
         backorder_qty = bo_lookup.get(sku, 0)
 
-        # Get open POs from lookup
+        # Get open POs from lookup (includes both domestic + international)
+        # This represents all incoming supply (open orders not yet received)
         open_po_qty = po_lookup.get(sku, 0)
+
+        # ===== CASCADING LEAD TIME: SKU → Vendor → Overall (domestic 73 / intl 114) =====
+        # Get vendor first (needed for vendor-level lead time lookup)
+        vendor = vendor_po_lookup.get(sku, None)
+        if not vendor:
+            master_data = master_lookup.get(sku, ('Unknown', ''))
+            vendor = master_data[0] if master_data[0] != 'Unknown' else 'Unknown'
+
+        # Determine lead time using cascade:
+        # 1. Per-SKU lead time (if available from PO history)
+        # 2. Per-Vendor lead time (if available)
+        # 3. Overall fallback (domestic 73 / international 114)
+        lead_time = None
+
+        # Priority 1: Per-SKU lead time
+        if sku in sku_lead_times:
+            lead_time = sku_lead_times[sku]
+
+        # Priority 2: Per-Vendor lead time
+        if lead_time is None and vendor and vendor != 'Unknown':
+            if vendor in vendor_lead_times:
+                lead_time = vendor_lead_times[vendor]
+            # Also check international variant
+            elif f"{vendor} (International)" in vendor_lead_times:
+                lead_time = vendor_lead_times[f"{vendor} (International)"]
+
+        # Priority 3: Overall fallback based on source
+        if lead_time is None:
+            # Check if SKU has international PO (use 114) or domestic (use 73)
+            # For now, use default (which is 73 for domestic)
+            lead_time = default_lead_time_days
 
         # Calculate safety stock
         safety_stock = calculate_safety_stock(
@@ -609,7 +798,11 @@ def generate_replenishment_plan(
         )
 
         # Calculate available supply
-        available_supply = on_hand + in_transit + open_po_qty
+        # Formula: On Hand + Open POs (domestic + international)
+        # Note: We use open_po_qty which is the sum of open domestic vendor POs
+        # and open international shipments (ATL). We do NOT add inventory in_transit
+        # separately as that could double-count with the open POs.
+        available_supply = on_hand + open_po_qty
 
         # Calculate days of supply
         days_of_supply = available_supply / daily_demand if daily_demand > 0 else 999
@@ -619,8 +812,9 @@ def generate_replenishment_plan(
 
         # Calculate suggested order (only if below ROP)
         if below_rop:
+            # Pass 0 for in_transit since we're using open_po_qty from vendor POs
             suggested_order = calculate_suggested_order(
-                order_up_to, on_hand, in_transit, open_po_qty, backorder_qty
+                order_up_to, on_hand, 0, open_po_qty, backorder_qty
             )
         else:
             suggested_order = 0
@@ -628,21 +822,26 @@ def generate_replenishment_plan(
         # Calculate priority score
         priority = calculate_priority_score(days_of_supply, backorder_qty, daily_demand)
 
-        # Get vendor and product name - prefer inventory lookup, fallback to master
-        vendor, product_name = vendor_product_lookup.get(sku, ('Unknown', ''))
+        # Get vendor using cascading priority:
+        # 1. Vendor PO data (most accurate for SKUs with active POs)
+        # 2. Master data (broader coverage)
+        vendor = vendor_po_lookup.get(sku, None)
 
-        # Fallback to master data if vendor still Unknown
-        if vendor == 'Unknown':
+        if not vendor:
+            # Fallback to master data
             master_data = master_lookup.get(sku, ('Unknown', ''))
-            if master_data[0] != 'Unknown':
-                vendor = master_data[0]
-            if not product_name and master_data[1]:
-                product_name = master_data[1]
+            vendor = master_data[0] if master_data[0] != 'Unknown' else 'Unknown'
 
-        # Use product_name from demand row if available
-        row_product_name = getattr(row, 'product_name', None)
-        if row_product_name:
-            product_name = row_product_name
+        # Get product name from master data
+        product_name = ''
+        master_data = master_lookup.get(sku, ('Unknown', ''))
+        if master_data[1]:
+            product_name = master_data[1]
+
+        # Use product_name or sku_description from demand row if available (overrides master)
+        row_product_name = getattr(row, 'product_name', None) or getattr(row, 'sku_description', None)
+        if row_product_name and str(row_product_name) not in ['', 'nan', 'None', 'Unknown']:
+            product_name = str(row_product_name)
 
         plan_list.append({
             'sku': sku,
@@ -655,7 +854,7 @@ def generate_replenishment_plan(
             'reorder_point': reorder_point,
             'order_up_to_level': order_up_to,
             'on_hand_qty': on_hand,
-            'in_transit_qty': in_transit,
+            'in_transit_qty': 0,  # Not used - using open_po_qty from vendor POs instead
             'open_po_qty': open_po_qty,
             'available_supply': available_supply,
             'backorder_qty': backorder_qty,

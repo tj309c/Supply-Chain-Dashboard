@@ -1,7 +1,7 @@
 """
 Replenishment Planning Page
 Suggested order quantities based on:
-- Demand forecast (moving average)
+- Demand forecast (exponential smoothing with anomaly detection & seasonality)
 - Current inventory
 - Open vendor POs (domestic + international)
 - Backorders
@@ -77,10 +77,10 @@ def render_replenishment_settings_sidebar():
         "Default Lead Time (days)",
         min_value=30,
         max_value=180,
-        value=90,
+        value=73,
         step=15,
         key="replenishment_lead_time",
-        help="Lead time to use when no PO history exists"
+        help="Default lead time for domestic vendors (73 days median from PO history)"
     )
 
     review_period = st.sidebar.selectbox(
@@ -280,7 +280,8 @@ def render_replenishment_page(
     backorder_data: pd.DataFrame,
     vendor_pos_data: pd.DataFrame,
     atl_fulfillment_data: pd.DataFrame,
-    master_data: pd.DataFrame
+    master_data: pd.DataFrame,
+    lead_time_lookup: dict = None
 ):
     """
     Main render function for the Replenishment Planning page.
@@ -292,6 +293,7 @@ def render_replenishment_page(
         vendor_pos_data: Open domestic vendor POs
         atl_fulfillment_data: Open international shipments
         master_data: Master data for SKU details
+        lead_time_lookup: Optional dict mapping SKU to lead time days
     """
 
     # Page header
@@ -571,7 +573,7 @@ def render_replenishment_page(
 
         ### Data Sources
         - **Inventory**: Current on-hand quantities
-        - **Demand Forecast**: Moving average from Demand Forecasting module
+        - **Demand Forecast**: Exponential smoothing with anomaly detection and seasonal adjustment from Demand Forecasting module
         - **Open POs**: Domestic Vendor POs + ATL Fulfillment (international)
         - **Backorders**: Current backorder quantities
         """)

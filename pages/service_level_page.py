@@ -314,39 +314,47 @@ def render_customer_performance_tab(filtered_data):
         'units_issued': 'sum',
         'days_to_deliver': 'mean'
     }
-    if 'planning_on_time' in filtered_data.columns:
+    has_planning = 'planning_on_time' in filtered_data.columns
+    has_logistics = 'logistics_on_time' in filtered_data.columns
+
+    if has_planning:
         agg['planning_on_time'] = ['sum', 'count']
     else:
         agg['on_time'] = ['sum', 'count']
-    if 'logistics_on_time' in filtered_data.columns:
+    if has_logistics:
         agg['logistics_on_time'] = ['sum', 'count']
 
     customer_summary = filtered_data.groupby('customer_name').agg(agg).reset_index()
 
-    # normalize column names
-    cols = list(customer_summary.columns)
-    if 'planning_on_time' in filtered_data.columns:
-        # e.g., customer, planning_on_time_sum, planning_on_time_count, logistics_on_time_sum, logistics_on_time_count, units_issued, days_to_deliver
-        # build readable columns
-        name_map = {}
-        new_cols = []
-        for col in cols:
-            if col == 'customer_name':
-                new_cols.append('Customer')
-            elif col == 'planning_on_time':
-                new_cols.extend(['On_Time_Count', 'Total_Orders'])
-            elif col == 'logistics_on_time':
-                new_cols.extend(['Logistics_On_Time_Count', 'Logistics_Total'])
-            elif col == 'units_issued':
-                new_cols.append('Total_Units')
-            elif col == 'days_to_deliver':
-                new_cols.append('Avg_Days')
-        customer_summary.columns = new_cols
-        # compute percentage
-        if 'On_Time_Count' in customer_summary.columns and 'Total_Orders' in customer_summary.columns:
-            customer_summary['On_Time_%'] = (customer_summary['On_Time_Count'] / customer_summary['Total_Orders'] * 100).round(1)
+    # Flatten multi-level column names after aggregation
+    # After agg with ['sum', 'count'], columns become tuples like ('planning_on_time', 'sum')
+    flat_cols = []
+    for col in customer_summary.columns:
+        if isinstance(col, tuple):
+            flat_cols.append(f"{col[0]}_{col[1]}")
+        else:
+            flat_cols.append(col)
+    customer_summary.columns = flat_cols
+
+    # Build the final column rename mapping
+    rename_map = {'customer_name': 'Customer'}
+    if has_planning:
+        rename_map['planning_on_time_sum'] = 'On_Time_Count'
+        rename_map['planning_on_time_count'] = 'Total_Orders'
     else:
-        customer_summary.columns = ['Customer', 'On_Time_Count', 'Total_Orders', 'Total_Units', 'Avg_Days']
+        rename_map['on_time_sum'] = 'On_Time_Count'
+        rename_map['on_time_count'] = 'Total_Orders'
+    if has_logistics:
+        rename_map['logistics_on_time_sum'] = 'Logistics_On_Time_Count'
+        rename_map['logistics_on_time_count'] = 'Logistics_Total'
+    rename_map['units_issued_sum'] = 'Total_Units'
+    rename_map['days_to_deliver_mean'] = 'Avg_Days'
+
+    # Apply rename only for columns that exist
+    customer_summary = customer_summary.rename(columns={k: v for k, v in rename_map.items() if k in customer_summary.columns})
+
+    # compute percentage
+    if 'On_Time_Count' in customer_summary.columns and 'Total_Orders' in customer_summary.columns:
         customer_summary['On_Time_%'] = (customer_summary['On_Time_Count'] / customer_summary['Total_Orders'] * 100).round(1)
 
     # Sort customers by On-Time % (descending), then by Total Orders (descending)

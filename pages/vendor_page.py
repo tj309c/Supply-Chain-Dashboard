@@ -1022,8 +1022,24 @@ def render_at_risk_pos_tab(po_data):
 
 # ===== MAIN VENDOR PAGE WITH TABS =====
 
-def render_vendor_page(po_data, vendor_performance, pricing_analysis=None, vendor_discount_summary=None):
-    """Main vendor page render function with tabbed interface"""
+def render_vendor_page(po_data, vendor_performance, pricing_analysis=None, vendor_discount_summary=None,
+                       international_po_data=None, international_vendor_performance=None,
+                       international_pricing_analysis=None, international_vendor_discount_summary=None):
+    """
+    Main vendor page render function with tabbed interface.
+
+    Supports Domestic vs International view toggle that filters all tabs.
+
+    Args:
+        po_data: Domestic vendor PO data (from Domestic Vendor POs.csv)
+        vendor_performance: Domestic vendor performance metrics
+        pricing_analysis: Domestic pricing analysis data
+        vendor_discount_summary: Domestic vendor discount summary
+        international_po_data: International vendor PO data (from ATL_FULLFILLMENT.csv)
+        international_vendor_performance: International vendor performance metrics
+        international_pricing_analysis: International pricing analysis data
+        international_vendor_discount_summary: International vendor discount summary
+    """
 
     # Page header
     render_page_header(
@@ -1032,11 +1048,59 @@ def render_vendor_page(po_data, vendor_performance, pricing_analysis=None, vendo
         subtitle="Open PO management, vendor performance tracking, pricing intelligence, and procurement analytics"
     )
 
-    # Calculate metrics
-    metrics = calculate_vendor_metrics(po_data, vendor_performance)
+    # ===== PAGE-LEVEL FILTER: DOMESTIC vs INTERNATIONAL =====
+    # Check if international data is available
+    has_international = international_po_data is not None and not international_po_data.empty
 
-    # Render KPI rows
-    st.subheader("Key Procurement Metrics")
+    # Create filter container at the top
+    filter_container = st.container()
+    with filter_container:
+        col1, col2, col3 = st.columns([2, 2, 6])
+
+        with col1:
+            # View selector
+            view_options = ["Domestic"]
+            if has_international:
+                view_options.append("International")
+
+            selected_view = st.radio(
+                "**View**",
+                options=view_options,
+                horizontal=True,
+                key="vendor_view_selector",
+                help="Switch between Domestic (US suppliers) and International (overseas suppliers) vendor data"
+            )
+
+        with col2:
+            # Show data source info
+            if selected_view == "Domestic":
+                st.info("📍 **Source:** Domestic Vendor POs.csv, Inbound_DB.csv")
+            else:
+                st.info("🌍 **Source:** ATL_FULLFILLMENT.csv")
+
+    st.divider()
+
+    # ===== SELECT DATA BASED ON VIEW =====
+    if selected_view == "International" and has_international:
+        # Use international data
+        active_po_data = international_po_data
+        active_vendor_performance = international_vendor_performance if international_vendor_performance is not None else pd.DataFrame()
+        active_pricing_analysis = international_pricing_analysis
+        active_vendor_discount_summary = international_vendor_discount_summary
+        view_label = "International"
+    else:
+        # Use domestic data (default)
+        active_po_data = po_data
+        active_vendor_performance = vendor_performance
+        active_pricing_analysis = pricing_analysis
+        active_vendor_discount_summary = vendor_discount_summary
+        view_label = "Domestic"
+
+    # Calculate metrics for the selected view
+    metrics = calculate_vendor_metrics(active_po_data, active_vendor_performance)
+
+    # Render KPI rows with view indicator
+    st.subheader(f"Key Procurement Metrics ({view_label})")
 
     # Row 1: Open PO Overview
     kpi_row_1 = {
@@ -1058,7 +1122,7 @@ def render_vendor_page(po_data, vendor_performance, pricing_analysis=None, vendo
 
     st.divider()
 
-    # Tabbed Interface
+    # Tabbed Interface - uses active (filtered) data
     tab1, tab2, tab3, tab4 = st.tabs([
         "📋 Open POs",
         "📊 Vendor Performance",
@@ -1067,13 +1131,21 @@ def render_vendor_page(po_data, vendor_performance, pricing_analysis=None, vendo
     ])
 
     with tab1:
-        render_open_pos_tab(po_data)
+        render_open_pos_tab(active_po_data)
 
     with tab2:
-        render_vendor_performance_tab(vendor_performance)
+        render_vendor_performance_tab(active_vendor_performance)
 
     with tab3:
-        render_pricing_analysis_tab(pricing_analysis, vendor_discount_summary)
+        # Show info message if pricing analysis not available for international
+        if selected_view == "International" and (active_pricing_analysis is None or active_pricing_analysis.empty):
+            render_info_box(
+                "Pricing analysis is not available for International vendors. "
+                "ATL Fulfillment data does not include unit pricing information.",
+                type="info"
+            )
+        else:
+            render_pricing_analysis_tab(active_pricing_analysis, active_vendor_discount_summary)
 
     with tab4:
-        render_at_risk_pos_tab(po_data)
+        render_at_risk_pos_tab(active_po_data)
