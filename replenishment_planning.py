@@ -743,8 +743,9 @@ def generate_replenishment_plan(
             demand_std = demand_std / 30.0
 
         # Get inventory from lookup (O(1) instead of O(n))
+        # inv_lookup stores (on_hand, in_transit_qty, unit_cost)
         inv_data = inv_lookup.get(sku, (0, 0, 0))
-        on_hand, _in_transit_inventory, unit_cost = inv_data
+        on_hand, in_transit, unit_cost = inv_data
 
         # Get backorders from lookup
         backorder_qty = bo_lookup.get(sku, 0)
@@ -854,7 +855,10 @@ def generate_replenishment_plan(
             'reorder_point': reorder_point,
             'order_up_to_level': order_up_to,
             'on_hand_qty': on_hand,
-            'in_transit_qty': 0,  # Not used - using open_po_qty from vendor POs instead
+            # Keep the actual in-transit quantity for display, but when
+            # calculating suggested orders we intentionally pass 0 to
+            # calculate_suggested_order to avoid double-counting open PO lines.
+            'in_transit_qty': in_transit,
             'open_po_qty': open_po_qty,
             'available_supply': available_supply,
             'backorder_qty': backorder_qty,
